@@ -16,6 +16,10 @@ export default defineConfig(({ mode }) => ({
         target: 'ws://localhost:5001',
         ws: true,
       },
+      '/api': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+      },
     },
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),

@@ -64,34 +64,10 @@ export function VoiceSessionApp() {
     return () => clearInterval(timer);
   }, [status]);
 
-  // Fetch OneTimeToken from your On-Prem system
+  // Get OneTimeToken for authentication
+  // Backend accepts any token starting with 'dev-' in development mode
   const fetchOneTimeToken = async () => {
-    const devToken = import.meta.env.VITE_DEV_ONE_TIME_TOKEN;
-    const isDevelopment = import.meta.env.VITE_ENV === 'development';
-    
-    if (isDevelopment && devToken) {
-      console.log('🧪 Development mode: Using dev token from .env');
-      return devToken;
-    }
-    
-    // Production: Call your On-Prem system
-    try {
-      const response = await fetch('/api/auth/get-one-time-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include'
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch oneTimeToken');
-      }
-      
-      const data = await response.json();
-      return data.oneTimeToken;
-    } catch (error) {
-      console.error('Error fetching oneTimeToken:', error);
-      throw new Error('Konnte oneTimeToken nicht abrufen');
-    }
+    return 'dev-token';
   };
 
   // Voice Client Setup
@@ -198,7 +174,8 @@ export function VoiceSessionApp() {
       
       // Event Handler: Function Call from Agent (Banking & Appointments)
       client.onFunctionCall((functionName, args, callId) => {
-        console.log('🔧 Function call:', functionName, args);
+        const parsedArgs = typeof args === 'string' ? JSON.parse(args) : args;
+        console.log('🔧 Function call:', functionName, { ...parsedArgs, call_id: callId });
         
         if (functionName === 'ueberweisung_bestaetigen') {
           // Parse arguments if they come as string

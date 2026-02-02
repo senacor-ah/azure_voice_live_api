@@ -178,7 +178,14 @@ check_node_modules
 check_env_file
 echo ""
 
-echo -e "${BLUE}Step 3: Starting Servers${NC}"
+echo -e "${BLUE}Step 3: Setup Directories${NC}"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo -e "${GREEN}📁 Creating logs directory...${NC}"
+mkdir -p "${PROJECT_ROOT}/logs"
+echo -e "${GREEN}   ✓ Logs directory ready${NC}"
+echo ""
+
+echo -e "${BLUE}Step 4: Starting Servers${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Start Backend

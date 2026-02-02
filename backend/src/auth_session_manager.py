@@ -146,7 +146,7 @@ class AuthSessionManager:
             # Call On-Prem Token Exchange Endpoint
             response = await self.http_client.post(
                 self.onprem_auth_url,
-                json={"token": one_time_token},
+                json={"oneTimeToken": one_time_token},
                 headers={"Content-Type": "application/json"}
             )
             
