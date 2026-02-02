@@ -477,54 +477,91 @@ export class AuthenticatedVoiceClient {
      */
     private async _startWebRTC(avatarConfig: any): Promise<void> {
         try {
-            console.log('Avatar config:', avatarConfig);
+            console.log('Avatar config received:', JSON.stringify(avatarConfig, null, 2));
             
             // Build ICE servers from avatar config
-            const iceServers: RTCIceServer[] = avatarConfig.ice_servers || [];
+            // Azure returns ice_servers as array of {urls: string[], username?: string, credential?: string}
+            const iceServers: RTCIceServer[] = [];
             
-            // Add TURN server with credentials if provided
-            if (avatarConfig.username && avatarConfig.credential) {
-                // Azure typically provides multiple URLs
-                const urls = avatarConfig.urls || avatarConfig.ice_servers?.map((s: any) => s.urls).flat() || [];
-                if (urls.length > 0) {
-                    iceServers.push({
-                        urls: urls,
-                        username: avatarConfig.username,
-                        credential: avatarConfig.credential
-                    });
+            if (avatarConfig.ice_servers && Array.isArray(avatarConfig.ice_servers)) {
+                for (const server of avatarConfig.ice_servers) {
+                    const iceServer: RTCIceServer = {
+                        urls: server.urls || []
+                    };
+                    // Add credentials if provided (for TURN servers)
+                    if (server.username) {
+                        iceServer.username = server.username;
+                    }
+                    if (server.credential) {
+                        iceServer.credential = server.credential;
+                    }
+                    iceServers.push(iceServer);
                 }
             }
             
-            console.log('ICE servers:', iceServers);
+            // Also check for top-level username/credential (Azure sometimes provides these separately)
+            if (avatarConfig.username && avatarConfig.credential && iceServers.length > 0) {
+                // Apply to all servers if not already set
+                for (const server of iceServers) {
+                    if (!server.username) server.username = avatarConfig.username;
+                    if (!server.credential) server.credential = avatarConfig.credential;
+                }
+            }
+            
+            console.log('ICE servers configured:', JSON.stringify(iceServers, null, 2));
             
             // Create RTCPeerConnection
             this.peerConnection = new RTCPeerConnection({
                 iceServers: iceServers.length > 0 ? iceServers : undefined
             });
             
+            // Create a single MediaStream for all tracks
+            const avatarStream = new MediaStream();
+            let hasVideo = false;
+            let hasAudio = false;
+            let playStarted = false;
+            
             // Handle incoming tracks (video + audio from avatar)
             this.peerConnection.ontrack = (event: RTCTrackEvent) => {
-                console.log('WebRTC track received:', event.track.kind);
+                console.log('WebRTC track received:', event.track.kind, 'readyState:', event.track.readyState);
                 
-                if (event.track.kind === 'video' && this.videoElement) {
-                    console.log('Setting video stream to element');
-                    this.videoElement.srcObject = event.streams[0];
-                    this.videoElement.play().then(() => {
-                        console.log('Video playback started');
-                        this._onVideoPlaybackStarted?.();
-                    }).catch(err => {
-                        console.error('Video play error:', err);
-                    });
+                // Add track to our unified stream
+                avatarStream.addTrack(event.track);
+                
+                if (event.track.kind === 'video') {
+                    hasVideo = true;
+                    console.log('Video track added to stream');
                 }
                 
                 if (event.track.kind === 'audio') {
-                    console.log('Audio track received from WebRTC');
-                    // Audio is automatically played through the video element or we can route it
-                    if (this.videoElement) {
-                        // Video element will play both video and audio
-                        this.videoElement.srcObject = event.streams[0];
-                    }
+                    hasAudio = true;
+                    console.log('Audio track added to stream');
                     this._onAudioPlaybackStarted?.();
+                }
+                
+                // Set srcObject once we have at least the video track
+                if (this.videoElement && hasVideo && !playStarted) {
+                    playStarted = true;
+                    console.log('Setting unified stream to video element');
+                    this.videoElement.srcObject = avatarStream;
+                    
+                    // Small delay to ensure tracks are ready
+                    setTimeout(() => {
+                        if (this.videoElement) {
+                            this.videoElement.play().then(() => {
+                                console.log('Video playback started successfully');
+                                this._onVideoPlaybackStarted?.();
+                            }).catch(err => {
+                                console.error('Video play error:', err);
+                                // Retry once after a short delay
+                                setTimeout(() => {
+                                    this.videoElement?.play().catch(e => 
+                                        console.error('Retry video play failed:', e)
+                                    );
+                                }, 100);
+                            });
+                        }
+                    }, 50);
                 }
             };
             
@@ -546,27 +583,51 @@ export class AuthenticatedVoiceClient {
                 console.log('Signaling state:', this.peerConnection?.signalingState);
             };
             
-            // Add transceivers for video and audio (sendrecv as required by Azure Avatar)
-            // Azure expects sendrecv even though we only receive - this is required for proper negotiation
-            this.peerConnection.addTransceiver('video', { direction: 'sendrecv' });
-            this.peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
+            // Log ICE candidates as they're gathered
+            this.peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    console.log('ICE candidate gathered:', event.candidate.candidate.substring(0, 50) + '...');
+                } else {
+                    console.log('ICE gathering complete (null candidate)');
+                }
+            };
+            
+            // Add transceivers for video and audio
+            // Use 'recvonly' since we only receive from Azure Avatar, not send
+            this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
+            this.peerConnection.addTransceiver('audio', { direction: 'recvonly' });
             
             // Create offer
             const offer = await this.peerConnection.createOffer();
             await this.peerConnection.setLocalDescription(offer);
             
-            console.log('WebRTC offer created, sending to backend...');
+            console.log('WebRTC offer created, waiting for ICE gathering...');
+            console.log('Local SDP (first 500 chars):', offer.sdp?.substring(0, 500));
             
-            // Wait for ICE gathering to complete (or timeout after 2 seconds)
-            await this._waitForIceGathering(2000);
+            // Wait for ICE gathering to complete (or timeout after 5 seconds)
+            await this._waitForIceGathering(5000);
+            
+            // Log final SDP
+            const finalSdp = this.peerConnection.localDescription?.sdp || '';
+            console.log('Final SDP length:', finalSdp.length);
+            console.log('Final SDP has candidates:', finalSdp.includes('a=candidate'));
+            
+            // IMPORTANT: Azure expects SDP as Base64-encoded JSON with {type, sdp}
+            // This matches the Microsoft demo format
+            const sdpObject = {
+                type: 'offer',
+                sdp: finalSdp
+            };
+            const sdpBase64 = btoa(JSON.stringify(sdpObject));
+            console.log('Encoded SDP (Base64 JSON) length:', sdpBase64.length);
             
             // Send offer to backend
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 this.ws.send(JSON.stringify({
                     type: 'session.avatar.connect',
-                    client_sdp: this.peerConnection.localDescription?.sdp
+                    client_sdp: sdpBase64
                 }));
-                console.log('WebRTC offer sent to backend');
+                console.log('WebRTC offer sent to backend (Base64-encoded JSON format)');
             }
             
         } catch (error) {
@@ -607,14 +668,31 @@ export class AuthenticatedVoiceClient {
     /**
      * Handle WebRTC answer from server
      */
-    private async _handleWebRTCAnswer(sdp: string): Promise<void> {
+    private async _handleWebRTCAnswer(sdpInput: string): Promise<void> {
         try {
             if (!this.peerConnection) {
                 console.error('No peer connection for answer');
                 return;
             }
             
-            console.log('Setting remote description...');
+            console.log('Processing WebRTC answer, input length:', sdpInput.length);
+            
+            // Try to decode Base64 JSON (Azure's format)
+            let sdp = sdpInput;
+            try {
+                // Check if it looks like Base64 (no whitespace, valid Base64 chars)
+                if (/^[A-Za-z0-9+/=]+$/.test(sdpInput) && !sdpInput.includes('v=0')) {
+                    const decoded = atob(sdpInput);
+                    const parsed = JSON.parse(decoded);
+                    console.log('Decoded Base64 SDP JSON:', parsed.type);
+                    sdp = parsed.sdp || parsed;
+                }
+            } catch (e) {
+                // Not Base64 encoded, use as-is
+                console.log('SDP is not Base64-encoded, using directly');
+            }
+            
+            console.log('Setting remote description, SDP length:', sdp.length);
             
             await this.peerConnection.setRemoteDescription({
                 type: 'answer',

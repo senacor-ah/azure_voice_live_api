@@ -1286,12 +1286,15 @@ WICHTIGE REGELN:
                     }
                 }
         elif event.type == ServerEventType.ERROR:
-            logger.error("❌ Azure error: %s (code: %s)", event.error.message, event.error.code)
+            error_message = event.error.message if hasattr(event.error, 'message') else str(event.error)
+            error_code = event.error.code if hasattr(event.error, 'code') else 'unknown'
+            logger.error("❌ Azure error: %s (code: %s)", error_message, error_code)
+            logger.error("   Full error event: %s", event)
             return {
                 "type": "error",
                 "error": {
-                    "message": event.error.message,
-                    "code": event.error.code
+                    "message": error_message,
+                    "code": error_code
                 }
             }
         elif event.type == ServerEventType.CONVERSATION_ITEM_CREATED:
@@ -1390,9 +1393,9 @@ WICHTIGE REGELN:
                 "text": transcript,
                 "timestamp": datetime.now().isoformat()
             }
-        elif hasattr(event, 'type') and str(event.type).endswith('session.avatar.connecting'):
+        elif event.type == ServerEventType.SESSION_AVATAR_CONNECTING:
             # WebRTC Avatar SDP Answer from Azure
-            logger.info("📹 Received WebRTC answer from Azure")
+            logger.info("📹 Received WebRTC answer from Azure (SESSION_AVATAR_CONNECTING)")
             server_sdp = getattr(event, 'server_sdp', '')
             if server_sdp:
                 logger.info("   📤 Sending WebRTC answer to client (SDP length: %d)", len(server_sdp))
@@ -1401,7 +1404,7 @@ WICHTIGE REGELN:
                     "server_sdp": server_sdp
                 }
             else:
-                logger.warn("No server_sdp in avatar connecting event!")
+                logger.warning("No server_sdp in avatar connecting event! Event: %s", event)
                 return None
         elif event.type == ServerEventType.RESPONSE_FUNCTION_CALL_ARGUMENTS_DELTA:
             # Function Call in progress
@@ -1411,7 +1414,9 @@ WICHTIGE REGELN:
         else:
             # Log ALL events für Debugging
             event_type_str = str(event.type)
-            if 'FUNCTION' in event_type_str or 'TOOL' in event_type_str:
+            if 'avatar' in event_type_str.lower():
+                logger.warning("⚠️ AVATAR event: %s - Full event: %s", event.type, event)
+            elif 'FUNCTION' in event_type_str or 'TOOL' in event_type_str:
                 logger.warning("⚠️ Unhandled FUNCTION event: %s", event.type)
             else:
                 logger.debug("📥 Unhandled event: %s", event.type)
