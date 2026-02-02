@@ -38,10 +38,8 @@ export function BottomNavigation({
         "glass-card border-t border-border/50",
         "grid grid-cols-3 gap-1",
         "px-2 py-2 pb-safe",
-        "fixed bottom-0 left-0 right-0 z-50",
+        "absolute bottom-0 left-0 right-0 z-50",
         "bg-background/95 backdrop-blur-lg",
-        "mx-auto",
-        "max-w-[430px]",
         className
       )}
     >

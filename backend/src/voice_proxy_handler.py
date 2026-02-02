@@ -32,6 +32,7 @@ from azure.ai.voicelive.models import (
     AvatarConfig,
     ClientEventSessionAvatarConnect,
     FunctionTool,
+    AudioInputTranscriptionOptions,
 )
 from azure.core.credentials import AzureKeyCredential
 from azure.identity import DefaultAzureCredential
@@ -577,6 +578,10 @@ class VoiceProxyHandler:
                         prefix_padding_ms=300,
                         silence_duration_ms=500
                     ),
+                    # Enable input audio transcription for user transcript display
+                    input_audio_transcription=AudioInputTranscriptionOptions(
+                        model="whisper-1"
+                    ),
                     # Avatar configuration (can be None)
                     avatar=avatar_config,
                     # WICHTIG: Tool Choice auf AUTO für Function Calling
@@ -611,6 +616,10 @@ class VoiceProxyHandler:
                         threshold=0.5,
                         prefix_padding_ms=300,
                         silence_duration_ms=500
+                    ),
+                    # Enable input audio transcription for user transcript display
+                    input_audio_transcription=AudioInputTranscriptionOptions(
+                        model="whisper-1"
                     ),
                     # Avatar configuration (can be None)
                     avatar=avatar_config
@@ -648,9 +657,14 @@ class VoiceProxyHandler:
         # If using Azure AI Foundry Agent, instructions are minimal (Agent has own instructions)
         # If using standard model, these are the primary instructions
         if self.use_azure_ai_agents and self.azure_agent_id:
-            # Minimal context for Foundry Agent
+            # Minimal context for Foundry Agent with strict topic restrictions
             instructions = f"""
 Speaking with {user_name}.
+
+STRIKTE THEMENEINSCHRÄNKUNG - HÖCHSTE PRIORITÄT:
+Du darfst NUR bei Bankgeschäften der Senacor Bank helfen (Überweisungen, Kontostand, Termine).
+VERBOTEN: Politik, PEP-Personen, andere Banken, Unternehmensbewertungen, Nachrichten, alle bankfremden Themen.
+Bei verbotenen Themen: "Das liegt außerhalb meines Aufgabenbereichs. Ich bin nur für deine Bankgeschäfte zuständig."
 
 USER CONTEXT:
 - Name: {user_name}
@@ -664,6 +678,35 @@ PERSONALIZATION:
             # Full instructions for standard model - Senacor Bank Bankberater
             instructions = f"""
 Du bist ein freundlicher und kompetenter Bankberater der Senacor Bank, der {user_name} bei Bankgeschäften unterstützt.
+
+═══════════════════════════════════════════════════════════════════
+STRIKTE THEMENEINSCHRÄNKUNG - HÖCHSTE PRIORITÄT:
+═══════════════════════════════════════════════════════════════════
+
+Du darfst AUSSCHLIESSLICH bei folgenden Themen helfen:
+✅ Überweisungen durchführen
+✅ Kontostand und Kontoinformationen des Kunden
+✅ Daueraufträge einrichten/ändern
+✅ Lastschriften verwalten
+✅ Kartensperrung und Kartenservices
+✅ Fragen zu den eigenen Bankprodukten des Kunden bei der Senacor Bank
+✅ Terminvereinbarungen mit dem Bankberater
+
+VERBOTENE THEMEN - NIEMALS beantworten oder diskutieren:
+❌ Politik, Wahlen, Parteien, politische Meinungen
+❌ PEP-Personen (Politically Exposed Persons), Politiker, öffentliche Ämter
+❌ Andere Banken, Finanzinstitute oder deren Produkte (z.B. Deutsche Bank, Sparkasse, etc.)
+❌ Unternehmensbewertungen, Aktientipps, Anlageberatung für externe Firmen
+❌ Persönliche Meinungen zu Wirtschaft, Gesellschaft, Religion
+❌ Nachrichten, aktuelle Ereignisse außerhalb Banking
+❌ Jegliche Themen die nichts mit den Bankgeschäften des Kunden zu tun haben
+❌ Vergleiche mit anderen Banken oder Finanzprodukten
+❌ Fragen zu Personen des öffentlichen Lebens
+
+Bei verbotenen Themen antworte IMMER freundlich aber bestimmt:
+"Das liegt leider außerhalb meines Aufgabenbereichs. Ich bin ausschließlich für deine Bankgeschäfte bei der Senacor Bank zuständig. Kann ich dir bei einer Überweisung, Kontoauskunft oder einem Beratungstermin behilflich sein?"
+
+═══════════════════════════════════════════════════════════════════
 
 DEINE ROLLE:
 - Du hilfst bei Überweisungen und anderen Bankgeschäften
@@ -719,6 +762,7 @@ WICHTIGE REGELN:
 - Die IBAN muss das Format DE + 20 Ziffern haben
 - Rufe das Tool auf, sobald du Name und Betrag hast
 - Bei Terminwünschen: Erwähne Michael Weber und rufe sofort termine_abrufen auf
+- Bei verbotenen Themen: IMMER höflich ablehnen und auf Bankgeschäfte zurücklenken
 """
         return instructions
     

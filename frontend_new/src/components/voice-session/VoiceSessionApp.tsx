@@ -43,6 +43,8 @@ export function VoiceSessionApp() {
   const responseStartTimeRef = useRef<number | null>(null);
   const connectionStartTimeRef = useRef<number | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const currentAiTextRef = useRef<string>('');
+  const currentAiMessageIdRef = useRef<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
 
   // Calculate average response time
@@ -79,23 +81,12 @@ export function VoiceSessionApp() {
       
       const client = new AuthenticatedVoiceClient(backendUrl);
       
-      // Event Handler: AI Text received
+      // Event Handler: AI Text received (streaming deltas - only for text-only mode)
+      // In audio mode, we use onAudioTranscriptDone instead
       client.onTextReceived((text) => {
-        // Filter out function call messages (they start with "Function call:")
-        if (text.startsWith('Function call:')) {
-          console.log('🔧 Ignoring function call text in transcript:', text);
-          return;
-        }
-        
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: Date.now().toString(),
-            role: 'assistant',
-            content: text,
-            timestamp: new Date(),
-          },
-        ]);
+        // In audio mode, text.delta is not typically sent
+        // This is only for text-only sessions
+        console.log('📝 Text delta received (text-only mode):', text);
       });
       
       // Event Handler: User Transcript received
@@ -154,12 +145,25 @@ export function VoiceSessionApp() {
       
       // Event Handler: Response Done (Agent finished speaking)
       client.onResponseDone(() => {
-        console.log('✅ Response done - but audio might still be playing');
+        console.log('✅ Response done');
       });
       
       // Event Handler: Audio Transcript Done (BETTER - agent REALLY finished speaking)
       client.onAudioTranscriptDone((transcript) => {
         console.log('🎤 Audio transcript done - agent finished speaking:', transcript);
+        
+        // Add the AI transcript to the message list
+        if (transcript && transcript.trim()) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `ai-${Date.now()}`,
+              role: 'assistant' as const,
+              content: transcript,
+              timestamp: new Date(),
+            },
+          ]);
+        }
         
         // Use functional state updates to access current values
         setIsLoadingAppointments(currentLoading => {
@@ -261,6 +265,8 @@ export function VoiceSessionApp() {
     setIsWaitingForResponse(false);
     responseStartTimeRef.current = null;
     connectionStartTimeRef.current = null;
+    currentAiTextRef.current = '';
+    currentAiMessageIdRef.current = null;
   }, []);
 
   const handleConnect = useCallback(async () => {
