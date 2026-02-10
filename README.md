@@ -18,6 +18,10 @@ USE_AZURE_AI_AGENTS=false
 ## 📋 Table of Contents
 
 - [Architecture Overview](#architecture-overview)
+- [Detailed Architecture Documentation](#detailed-architecture-documentation)
+  - [RAG Integration](#rag-integration-architecture)
+  - [Voice Agent System](#voice-agent-system)
+  - [Event Logging & Dashboard](#event-logging--real-time-dashboard)
 - [Quick Start](#quick-start)
 - [Backend Setup](#backend-setup)
 - [Frontend Setup](#frontend-setup)
@@ -62,7 +66,145 @@ USE_AZURE_AI_AGENTS=false
 ```
 
 ---
+## 📐 Detailed Architecture Documentation
 
+This section provides comprehensive technical documentation of the system architecture, covering RAG integration, voice agent system, and planned event-logging features.
+
+### System Status
+
+- ✅ RAG-Integration vollständig implementiert und produktiv
+- ✅ Voice Agent mit Function Tool `wissen_abfragen` 
+- ⏳ Event-Dashboard in Planung
+
+---
+
+### RAG Integration Architecture
+
+The system integrates Retrieval Augmented Generation (RAG) for knowledge-based Q&A about banking products and services.
+
+#### RAG Components Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Voice Session Flow                        │
+├─────────────────────────────────────────────────────────────┤
+│  User Question (Audio)                                       │
+│         ↓                                                    │
+│  [Voice Live API] → Transcription                           │
+│         ↓                                                    │
+│  [Voice Agent] → Erkennt Wissensfrage                       │
+│         ↓                                                    │
+│  [Function Tool: wissen_abfragen]                           │
+│    ├─ RAG Service (rag_service.py)                          │
+│    ├─ Embedding Generation (Azure OpenAI)                   │
+│    ├─ Hybrid Search (Azure AI Search)                       │
+│    ├─ Context Retrieval (Blob Storage)                      │
+│    └─ Answer Generation (Azure OpenAI Chat)                 │
+│         ↓                                                    │
+│  [Voice Agent] → Formatiert Antwort für Sprachausgabe      │
+│         ↓                                                    │
+│  [Voice Live API] → TTS → Audio Response                    │
+│         ↓                                                    │
+│  User Answer (Audio)                                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+
+
+#### RAG Pipeline Implementation
+
+Die RAG-Pipeline ist in zwei Hauptkomponenten aufgeteilt:
+
+**A. Standalone RAG Pipeline** ([backend/RAG/src/](backend/RAG/src/))
+- Modulare Python-Module für unabhängige Nutzung
+- Kann auch als CLI-Tool verwendet werden
+- Module:
+  - [blob_storage.py](backend/RAG/src/blob_storage.py) - Azure Blob Storage Manager
+  - [embeddings.py](backend/RAG/src/embeddings.py) - Embedding-Generierung mit Azure OpenAI
+  - [vector_search.py](backend/RAG/src/vector_search.py) - Hybrid Search mit Azure AI Search
+  - [answer_generator.py](backend/RAG/src/answer_generator.py) - LLM-basierte Antwortgenerierung
+  - [main.py](backend/RAG/src/main.py) - RAG Pipeline Orchestrator
+
+**B. Voice Agent Integration** ([backend/src/rag_service.py](backend/src/rag_service.py))
+- Wrapper um die RAG Pipeline für Voice Live API
+- Singleton-Pattern für effizienten Ressourcen-Umgang
+- Synchrone/Asynchrone Schnittstelle
+- Speziell optimiert für Sprachausgabe:
+  - Kurze, prägnante Antworten
+  - Vermeidung von langen Aufzählungen
+  - Natürliche Sprachausgabe
+
+#### Environment Configuration for RAG
+
+Add these variables to your `backend/.env` file:
+
+```env
+# ============================================================================
+# RAG Configuration (Azure AI Search + Embeddings)
+# ============================================================================
+AZURE_SEARCH_ENDPOINT=https://your-search-service.search.windows.net
+AZURE_SEARCH_API_KEY=your-search-api-key
+AZURE_SEARCH_INDEX_NAME=docsaisearch
+
+# Azure OpenAI for Embeddings
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-ada-002
+AZURE_OPENAI_EMBEDDING_API_VERSION=2023-05-15
+
+# Azure OpenAI for Chat/Answer Generation
+AZURE_OPENAI_CHAT_DEPLOYMENT=gpt-4o
+AZURE_OPENAI_CHAT_API_VERSION=2024-02-15-preview
+
+# Azure Blob Storage for Document Storage
+AZURE_STORAGE_ACCOUNT_NAME=your-storage-account
+AZURE_STORAGE_ACCOUNT_KEY=your-storage-key
+AZURE_CONTAINER_NAME=pdfs
+```
+
+#### Using RAG in Voice Conversations
+
+The RAG system is automatically invoked when users ask knowledge-based questions. The voice agent recognizes these questions and calls the `wissen_abfragen` function tool.
+
+**Example conversation:**
+```
+User: "Was sind die Konditionen für ein Girokonto?"
+Agent: [Calls wissen_abfragen function]
+       [Retrieves relevant documents from knowledge base]
+       [Generates natural language answer]
+       "Ein Girokonto bei uns bietet folgende Konditionen..."
+```
+
+---
+
+### Voice Agent System
+
+The voice agent system provides interactive function calling and tool integration for enhanced capabilities beyond simple conversation.
+
+#### Available Function Tools
+
+**Standard Mode** (`USE_AZURE_AI_AGENTS=false`):
+- `ueberweisung_bestaetigen` - Banking transfer confirmations with UI modal
+- `termin_buchen` - Appointment booking workflow
+- `wissen_abfragen` - RAG-based knowledge retrieval
+
+**Agent Mode** (`USE_AZURE_AI_AGENTS=true`) - Experimental:
+- Function tools managed in Azure AI Foundry portal
+- Can be updated via scripts in `scripts_and_dev_tools/`
+
+See the [Function Calling](#function-calling) section for detailed implementation.
+
+---
+
+### Event Logging & Real-time Dashboard
+
+**Status:** ⏳ In Planning
+
+Planned features:
+- Real-time visualization of customer journey
+- Event tracking and analytics
+- Conversation flow insights
+- Performance metrics dashboard
+
+---
 ## 🚀 Quick Start
 
 **Start the entire stack:**

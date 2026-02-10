@@ -11,9 +11,11 @@ WebSocket proxy handler that:
 
 import asyncio
 import base64
+import certifi
 import json
 import logging
 import os
+import ssl
 import struct
 import wave
 from datetime import datetime
@@ -44,6 +46,7 @@ from appointment_workflow import (
     WorkflowState,
     AppointmentSelection,
 )
+from rag_service import get_rag_service
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +249,14 @@ class VoiceProxyHandler:
         self.enable_recording = enable_recording
         self.recordings_dir = recordings_dir
         self.azure_voice_name = azure_voice_name
+        
+        # Initialize RAG service
+        self.rag_service = get_rag_service()
+        logger.info("Initializing RAG service...")
+        if self.rag_service.initialize():
+            logger.info("✅ RAG service initialized successfully")
+        else:
+            logger.warning("⚠️ RAG service initialization failed - RAG queries will not work")
         self.azure_avatar_enabled = azure_avatar_enabled
         self.azure_avatar_character = azure_avatar_character
         self.azure_avatar_style = azure_avatar_style
@@ -303,6 +314,17 @@ class VoiceProxyHandler:
             logger.info("Connecting to Azure Voice Live for user %s", session.get_user_name())
             logger.info(f"Endpoint: {self.azure_endpoint}")
             
+            # Create SSL context based on VERIFY_SSL environment variable
+            verify_ssl = os.getenv("VERIFY_SSL", "true").lower() == "true"
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            
+            if not verify_ssl:
+                logger.warning("SSL verification is DISABLED - not recommended for production!")
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+            else:
+                logger.info(f"SSL verification enabled using certificates from: {certifi.where()}")
+            
             # Configure connection based on Agent vs. Model
             connect_params = {
                 "endpoint": self.azure_endpoint,
@@ -310,6 +332,7 @@ class VoiceProxyHandler:
                     "max_msg_size": 10 * 1024 * 1024,
                     "heartbeat": 20,
                     "timeout": 20,
+                    "ssl": ssl_context,
                 }
             }
             
@@ -663,6 +686,7 @@ Speaking with {user_name}.
 
 STRIKTE THEMENEINSCHRÄNKUNG - HÖCHSTE PRIORITÄT:
 Du darfst NUR bei Bankgeschäften der Senacor Bank helfen (Überweisungen, Kontostand, Termine).
+Bei Produktfragen verwende IMMER das Tool "wissen_abfragen" - NIEMALS raten!
 VERBOTEN: Politik, PEP-Personen, andere Banken, Unternehmensbewertungen, Nachrichten, alle bankfremden Themen.
 Bei verbotenen Themen: "Das liegt außerhalb meines Aufgabenbereichs. Ich bin nur für deine Bankgeschäfte zuständig."
 
@@ -754,6 +778,21 @@ WORKFLOW FÜR TERMINVEREINBARUNG:
 10. Bei Fehlermeldung (z.B. "Ungültiger Termin"):
     - SAGE: "Es gab ein Problem mit der Terminauswahl. Bitte wählen Sie einen Termin direkt aus der angezeigten Liste."
 
+WORKFLOW FÜR PRODUKTFRAGEN (RAG-WISSENSABFRAGE):
+1. Erkenne Fragen zu Bankprodukten, Preisen, Gebühren, Konditionen, Services
+   Beispiele:
+   - "Welche Konten bietet ihr an?"
+   - "Was kostet eine Kreditkarte?"
+   - "Wie hoch sind die Gebühren für Überweisungen?"
+   - "Welche Arten von Daueraufträgen gibt es?"
+   - "Was ist ein StartDepot?"
+2. Verwende das Tool "wissen_abfragen" mit der Frage des Kunden
+3. Du erhältst eine detaillierte Antwort basierend auf offiziellen Dokumenten
+4. SPRICH die Antwort natürlich aus - KEINE wörtliche Wiedergabe!
+5. Halte die Antwort KURZ und prägnant (max. 3-4 Sätze)
+6. Bei komplexen Antworten: Fasse die wichtigsten Punkte zusammen
+7. Biete an, mehr Details zu geben wenn der Kunde nachfragt
+
 WICHTIGE REGELN:
 - Halte Antworten KURZ (2-3 Sätze)
 - Verwende natürliche, gesprochene Sprache
@@ -762,6 +801,7 @@ WICHTIGE REGELN:
 - Die IBAN muss das Format DE + 20 Ziffern haben
 - Rufe das Tool auf, sobald du Name und Betrag hast
 - Bei Terminwünschen: Erwähne Michael Weber und rufe sofort termine_abrufen auf
+- Bei Produktfragen: Verwende IMMER das Tool "wissen_abfragen" - NIEMALS raten oder erfinden!
 - Bei verbotenen Themen: IMMER höflich ablehnen und auf Bankgeschäfte zurücklenken
 """
         return instructions
@@ -857,6 +897,21 @@ WICHTIGE REGELN:
                         }
                     },
                     "required": ["termin_id", "datum", "uhrzeit"]
+                }
+            ),
+            FunctionTool(
+                type="function",
+                name="wissen_abfragen",
+                description="Beantwortet Fragen zu Bankprodukten, Preisen, Konditionen und Services basierend auf offiziellen Dokumenten. Verwende dieses Tool wenn der Kunde nach Informationen zu Produkten, Preisen, Gebühren, Kontoarten, Kreditkarten oder anderen Banking-Services fragt.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "frage": {
+                            "type": "string",
+                            "description": "Die spezifische Frage des Kunden zu Bankprodukten, Preisen oder Services"
+                        }
+                    },
+                    "required": ["frage"]
                 }
             )
         ]
@@ -1210,6 +1265,63 @@ WICHTIGE REGELN:
                         # Trigger response so agent can confirm the booking
                         await azure_conn.response.create()
                         logger.info("✅ Appointment confirmed, agent can now speak confirmation")
+                        # Don't send to client - this is backend-only
+                        continue
+                    
+                    elif function_name == "wissen_abfragen":
+                        # RAG Query: Search knowledge base and generate answer
+                        logger.info("📚 Backend: RAG knowledge query")
+                        arguments_str = getattr(event, 'arguments', '{}')
+                        args = json.loads(arguments_str) if arguments_str else {}
+                        
+                        frage = args.get('frage', '')
+                        logger.info(f"   Frage: {frage}")
+                        
+                        # Query RAG system
+                        rag_result = self.rag_service.query(
+                            question=frage,
+                            top_k=5,
+                            max_tokens=2000  # Sufficient for detailed answers
+                        )
+                        
+                        if rag_result.get("success"):
+                            answer = rag_result.get("answer", "")
+                            sources = rag_result.get("sources", [])
+                            logger.info(f"✅ RAG answer generated ({len(answer)} chars, {len(sources)} sources)")
+                            
+                            # Send answer to Azure
+                            await azure_conn.send({
+                                "type": "conversation.item.create",
+                                "item": {
+                                    "type": "function_call_output",
+                                    "call_id": call_id,
+                                    "output": json.dumps({
+                                        "success": True,
+                                        "answer": answer,
+                                        "source_count": len(sources)
+                                    })
+                                }
+                            })
+                        else:
+                            error = rag_result.get("error", "Unbekannter Fehler")
+                            logger.error(f"❌ RAG query failed: {error}")
+                            
+                            # Send error to Azure
+                            await azure_conn.send({
+                                "type": "conversation.item.create",
+                                "item": {
+                                    "type": "function_call_output",
+                                    "call_id": call_id,
+                                    "output": json.dumps({
+                                        "success": False,
+                                        "error": error
+                                    })
+                                }
+                            })
+                        
+                        # Trigger response so agent can speak the answer
+                        await azure_conn.response.create()
+                        logger.info("✅ RAG result sent to Azure, agent can now speak answer")
                         # Don't send to client - this is backend-only
                         continue
                 

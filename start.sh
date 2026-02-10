@@ -192,6 +192,12 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo -e "${GREEN}🚀 Starting Backend on port ${BACKEND_PORT}...${NC}"
 cd "${PROJECT_ROOT}/backend"
 source venv/bin/activate
+
+# Export SSL certificate path from certifi
+export SSL_CERT_FILE=$(python -m certifi)
+export REQUESTS_CA_BUNDLE=$(python -m certifi)
+echo -e "${BLUE}   → SSL Certificates: ${SSL_CERT_FILE}${NC}"
+
 export FLASK_ENV=development
 python src/app.py > ../logs/backend.log 2>&1 &
 BACKEND_PID=$!
