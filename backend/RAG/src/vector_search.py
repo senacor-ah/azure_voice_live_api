@@ -1,4 +1,6 @@
 import os
+import time
+import logging
 from azure.search.documents import SearchClient
 from azure.search.documents.indexes import SearchIndexClient
 from azure.search.documents.indexes.models import (
@@ -10,6 +12,8 @@ from azure.core.credentials import AzureKeyCredential
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class VectorSearchManager:
@@ -37,17 +41,17 @@ class VectorSearchManager:
             
             # Check if index exists, create if not
             if self._index_exists():
-                print(f"Search index '{self.search_index_name}' already exists.")
+                logger.info(f"Search index '{self.search_index_name}' already exists.")
             else:
-                print(f"Search index '{self.search_index_name}' does not exist. Creating...")
+                logger.info(f"Search index '{self.search_index_name}' does not exist. Creating...")
                 if self._create_index():
-                    print(f"Search index '{self.search_index_name}' created successfully.")
+                    logger.info(f"Search index '{self.search_index_name}' created successfully.")
                 else:
-                    print(f"Failed to create index '{self.search_index_name}'.")
+                    logger.error(f"Failed to create index '{self.search_index_name}'.")
                     return False
             return True
         except Exception as e:
-            print(f"Error initializing search client: {e}")
+            logger.error(f"Error initializing search client: {e}")
             return False
 
     def _index_exists(self):
@@ -61,6 +65,7 @@ class VectorSearchManager:
     def _create_index(self):
         """Create search index with vector field."""
         try:
+            start_time = time.time()
             index = SearchIndex(
                 name=self.search_index_name,
                 fields=[
@@ -85,9 +90,11 @@ class VectorSearchManager:
                 )
             )
             self.index_client.create_index(index)
+            elapsed = time.time() - start_time
+            logger.info(f"[TIMING] Search index created in {elapsed:.2f}s")
             return True
         except Exception as e:
-            print(f"Error creating index: {e}")
+            logger.error(f"Error creating index: {e}")
             return False
 
     def vector_search(self, embedding, top_k=5):
@@ -95,6 +102,7 @@ class VectorSearchManager:
         try:
             from azure.search.documents.models import VectorizedQuery
             
+            start_time = time.time()
             vector_query = VectorizedQuery(vector=embedding, k_nearest_neighbors=top_k, fields="embedding")
             results = self.search_client.search(
                 search_text="",
@@ -112,9 +120,11 @@ class VectorSearchManager:
                     "score": result.get("@search.score")
                 }
                 retrieved_docs.append(doc)
+            elapsed = time.time() - start_time
+            logger.info(f"[TIMING] Vector search completed in {elapsed:.2f}s (retrieved {len(retrieved_docs)} documents)")
             return retrieved_docs
         except Exception as e:
-            print(f"Error performing vector search: {e}")
+            logger.error(f"Error performing vector search: {e}")
             return []
 
     def hybrid_search(self, query, embedding, top_k=5):
@@ -122,6 +132,7 @@ class VectorSearchManager:
         try:
             from azure.search.documents.models import VectorizedQuery
             
+            start_time = time.time()
             vector_query = VectorizedQuery(vector=embedding, k_nearest_neighbors=top_k, fields="embedding")
             results = self.search_client.search(
                 search_text=query,
@@ -139,19 +150,23 @@ class VectorSearchManager:
                     "score": result.get("@search.score")
                 }
                 retrieved_docs.append(doc)
+            elapsed = time.time() - start_time
+            logger.info(f"[TIMING] Hybrid search completed in {elapsed:.2f}s (retrieved {len(retrieved_docs)} documents)")
             return retrieved_docs
         except Exception as e:
-            print(f"Error performing hybrid search: {e}")
+            logger.error(f"Error performing hybrid search: {e}")
             return []
 
     def upload_documents(self, documents):
         """Upload documents to search index."""
         try:
+            start_time = time.time()
             self.search_client.upload_documents(documents)
-            print(f"Uploaded {len(documents)} documents to index.")
+            elapsed = time.time() - start_time
+            logger.info(f"[TIMING] Indexed {len(documents)} documents in {elapsed:.2f}s")
             return True
         except Exception as e:
-            print(f"Error uploading documents: {e}")
+            logger.error(f"Error uploading documents: {e}")
             return False
 
     def delete_documents(self, doc_ids):

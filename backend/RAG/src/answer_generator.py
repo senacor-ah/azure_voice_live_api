@@ -1,8 +1,12 @@
 import os
+import time
+import logging
 from openai import AzureOpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class AnswerGenerator:
@@ -26,10 +30,10 @@ Format your answer in a clear, readable way."""
                 api_version=self.api_version,
                 azure_endpoint=self.api_endpoint
             )
-            print(f"Chat model '{self.deployment_name}' initialized.")
+            logger.info(f"Chat model '{self.deployment_name}' initialized.")
             return True
         except Exception as e:
-            print(f"Error initializing chat model: {e}")
+            logger.error(f"Error initializing chat model: {e}")
             return False
 
     def set_system_prompt(self, prompt):
@@ -62,16 +66,44 @@ ANSWER:"""
                 }
             ]
             
-            # Generate response
+            # Generate response with streaming for accurate timing
+            start_time = time.time()
+            first_byte_time = None
+            full_response = ""
+            token_count = 0
+            
+            # Stream the response to capture first token timing
             response = self.client.chat.completions.create(
                 model=self.deployment_name,
                 messages=messages,
-                max_completion_tokens=max_tokens
+                max_completion_tokens=max_tokens,
+                stream=True
             )
             
-            return response.choices[0].message.content.strip()
+            for chunk in response:
+                # Check if chunk has choices and content
+                if chunk.choices and len(chunk.choices) > 0:
+                    delta = chunk.choices[0].delta
+                    if delta.content is not None:
+                        # Record time of first token
+                        if first_byte_time is None:
+                            first_byte_time = time.time() - start_time
+                        
+                        # Accumulate the response
+                        full_response += delta.content
+                        token_count += 1
+            
+            total_time = time.time() - start_time
+            
+            # Log timing only if we got content
+            if first_byte_time is not None:
+                logger.info(f"[TIMING] LLM generation: First token in {first_byte_time:.2f}s, All tokens in {total_time:.2f}s ({token_count} tokens)")
+            else:
+                logger.warning(f"[TIMING] LLM generation: No tokens received in {total_time:.2f}s")
+            
+            return full_response.strip()
         except Exception as e:
-            print(f"Error generating answer: {e}")
+            logger.error(f"Error generating answer: {e}")
             return None
 
     def _build_context(self, documents):

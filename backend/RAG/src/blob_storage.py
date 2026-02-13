@@ -1,8 +1,11 @@
 import os
+import logging
 from azure.storage.blob import BlobServiceClient, ContainerClient
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class BlobStorageManager:
@@ -20,14 +23,14 @@ class BlobStorageManager:
             
             # Check if container exists
             if not self._container_exists():
-                print(f"Container '{self.container_name}' not found. Creating...")
+                logger.info(f"Container '{self.container_name}' not found. Creating...")
                 self.container_client = self.client.create_container(name=self.container_name)
-                print(f"Container '{self.container_name}' created.")
+                logger.info(f"Container '{self.container_name}' created.")
             else:
-                print(f"Container '{self.container_name}' already exists.")
+                logger.info(f"Container '{self.container_name}' already exists.")
             return True
         except Exception as e:
-            print(f"Error initializing blob storage: {e}")
+            logger.error(f"Error initializing blob storage: {e}")
             return False
 
     def _container_exists(self):
@@ -43,10 +46,10 @@ class BlobStorageManager:
         try:
             with open(file_path, "rb") as data:
                 self.container_client.upload_blob(blob_name, data, overwrite=True)
-            print(f"File '{file_path}' uploaded as '{blob_name}'.")
+            logger.info(f"File '{file_path}' uploaded as '{blob_name}'.")
             return True
         except Exception as e:
-            print(f"Error uploading blob: {e}")
+            logger.error(f"Error uploading blob: {e}")
             return False
 
     def download_blob(self, blob_name, download_path):
@@ -55,10 +58,10 @@ class BlobStorageManager:
             blob_client = self.container_client.get_blob_client(blob_name)
             with open(download_path, "wb") as file:
                 file.write(blob_client.download_blob().readall())
-            print(f"Blob '{blob_name}' downloaded to '{download_path}'.")
+            logger.info(f"Blob '{blob_name}' downloaded to '{download_path}'.")
             return True
         except Exception as e:
-            print(f"Error downloading blob: {e}")
+            logger.error(f"Error downloading blob: {e}")
             return False
 
     def list_blobs(self):
@@ -67,5 +70,5 @@ class BlobStorageManager:
             blobs = [blob.name for blob in self.container_client.list_blobs()]
             return blobs
         except Exception as e:
-            print(f"Error listing blobs: {e}")
+            logger.error(f"Error listing blobs: {e}")
             return []
