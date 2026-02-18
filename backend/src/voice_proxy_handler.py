@@ -304,12 +304,15 @@ class VoiceProxyHandler:
             logger.info(f"Endpoint: {self.azure_endpoint}")
             
             # Configure connection based on Agent vs. Model
+            # trust_env=True enables aiohttp to use system proxy settings
+            # from HTTPS_PROXY/HTTP_PROXY/NO_PROXY environment variables
             connect_params = {
                 "endpoint": self.azure_endpoint,
                 "connection_options": {
                     "max_msg_size": 10 * 1024 * 1024,
                     "heartbeat": 20,
                     "timeout": 20,
+                    "trust_env": True,  # Use system proxy settings
                 }
             }
             
