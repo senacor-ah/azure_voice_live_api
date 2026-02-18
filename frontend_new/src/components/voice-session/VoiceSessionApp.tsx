@@ -285,7 +285,7 @@ export function VoiceSessionApp() {
       // 3. Verbinden und authentifizieren
       const session = await client.connect(oneTimeToken);
       
-      setSessionInfo(session);
+      setSessionInfo({sessionId: session.sessionId, userName: session.userName || "Unknown"});
       setStatus("connected");
       setConnectionTime(0);
       
@@ -295,7 +295,7 @@ export function VoiceSessionApp() {
     } catch (err: any) {
       console.error('Connection error:', err);
       setError(err.message);
-      setStatus("error");
+      setStatus("disconnected");
       setIsConnecting(false);
       connectionStartTimeRef.current = null;
     }
@@ -427,7 +427,7 @@ export function VoiceSessionApp() {
                     isTranscriptMode ? "opacity-100 z-10" : "opacity-0 pointer-events-none z-0"
                   )}
                 >
-                  <TranscriptView messages={messages} />
+                  <TranscriptView messages={messages} isSessionActive={status === 'connected'} />
                 </div>
                 
                 {/* Floating Controls Overlay - Bottom Right (only in Avatar mode) */}
