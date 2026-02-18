@@ -1,0 +1,207 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f5f5f5;
+  --foreground: #1a1a2e;
+
+  /* Brand */
+  --primary: #7da0d7;
+  --primary-dark: #5a82bf;
+  --primary-light: #b3cce8;
+  --primary-fg: #ffffff;
+
+  /* Surface */
+  --card-bg: #ffffff;
+  --card-border: #e2e8f0;
+  --secondary-bg: #eef3fb;
+  --muted-fg: #64748b;
+
+  /* Semantic */
+  --success: #22c55e;
+  --success-bg: #dcfce7;
+  --destructive: #ef4444;
+  --destructive-bg: #fee2e2;
+  --warning: #f59e0b;
+  --warning-bg: #fef3c7;
+
+  /* Glass */
+  --glass-bg: rgba(255, 255, 255, 0.75);
+  --glass-border: rgba(125, 160, 215, 0.2);
+  --glass-blur: 16px;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans, 'Inter', Arial, sans-serif);
+}
+
+/* ─── Glass Card ───────────────────────────────────────────── */
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+}
+
+/* ─── Status Badges ───────────────────────────────────────── */
+.status-connected {
+  background: var(--success-bg);
+  color: #166534;
+  border-color: #86efac;
+}
+.status-disconnected {
+  background: #f1f5f9;
+  color: var(--muted-fg);
+  border-color: #cbd5e1;
+}
+.status-connecting {
+  background: var(--warning-bg);
+  color: #92400e;
+  border-color: #fcd34d;
+}
+
+/* ─── Control Buttons ─────────────────────────────────────── */
+.control-btn {
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+.control-btn-primary {
+  composes: control-btn;
+  background: var(--primary);
+  color: var(--primary-fg);
+  border: none;
+}
+.control-btn-primary:hover { background: var(--primary-dark); }
+.control-btn-primary:active { transform: scale(0.95); }
+
+.control-btn-secondary {
+  composes: control-btn;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  color: var(--foreground);
+}
+.control-btn-secondary:hover { background: var(--secondary-bg); }
+.control-btn-secondary:active { transform: scale(0.95); }
+
+.control-btn-destructive {
+  composes: control-btn;
+  background: var(--destructive);
+  color: #ffffff;
+  border: none;
+}
+.control-btn-destructive:hover { background: #dc2626; }
+.control-btn-destructive:active { transform: scale(0.95); }
+
+.control-btn-success {
+  composes: control-btn;
+  background: var(--success);
+  color: #ffffff;
+  border: none;
+}
+.control-btn-success:hover { background: #16a34a; }
+.control-btn-success:active { transform: scale(0.95); }
+
+/* ─── Message Bubbles ─────────────────────────────────────── */
+.message-user {
+  background: var(--primary);
+  color: var(--primary-fg);
+  border-radius: 1.25rem 1.25rem 0.25rem 1.25rem;
+  padding: 0.5rem 1rem;
+  max-width: 80%;
+  margin-left: auto;
+}
+.message-assistant {
+  background: var(--secondary-bg);
+  color: var(--foreground);
+  border-radius: 1.25rem 1.25rem 1.25rem 0.25rem;
+  padding: 0.5rem 1rem;
+  max-width: 80%;
+}
+
+/* ─── Audio Visualizer ────────────────────────────────────── */
+.audio-bar {
+  width: 3px;
+  background: var(--primary-light);
+  border-radius: 9999px;
+  transition: height 75ms;
+}
+.audio-bar-active {
+  background: var(--primary);
+}
+
+/* ─── Phone Container ─────────────────────────────────────── */
+.phone-container {
+  width: 100%;
+  margin: 0 auto;
+  position: relative;
+  overflow: hidden;
+  max-width: 430px;
+}
+
+@media (min-width: 768px) {
+  .phone-container {
+    border-radius: 2.5rem;
+    box-shadow:
+      0 0 0 10px #dde5f0,
+      0 0 0 12px #c8d6ec,
+      0 25px 60px -12px rgba(0, 0, 0, 0.25);
+    height: calc(100vh - 3rem);
+    margin-top: 1.5rem;
+  }
+}
+
+.chat-widget .phone-container {
+  max-width: 100%;
+  border-radius: 0;
+  box-shadow: none;
+  height: 100%;
+  margin-top: 0;
+}
+
+/* ─── Animations ──────────────────────────────────────────── */
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-slide-up { animation: slide-up 0.3s ease-out; }
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.93); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.animate-scale-in { animation: scale-in 0.2s ease-out; }
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.animate-fade-in { animation: fade-in 0.25s ease-out; }
+
+/* ─── Avatar Pulse ───────────────────────────────────────── */
+@keyframes avatar-pulse {
+  0%, 100% { transform: scale(1); }
+  50%       { transform: scale(1.12); }
+}
+.avatar-pulse {
+  animation: avatar-pulse 2.2s ease-in-out infinite;
+}
+.avatar-pulse:hover {
+  animation: none;
+  transform: scale(1.15);
+}
+
