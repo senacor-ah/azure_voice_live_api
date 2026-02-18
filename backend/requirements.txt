@@ -40,3 +40,6 @@ typing_extensions==4.15.0
 urllib3==2.6.3
 six>=1.16.0
 
+# Azure Web PubSub for event streaming
+azure-messaging-webpubsubservice>=1.0.0
+

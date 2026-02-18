@@ -26,6 +26,7 @@ load_dotenv(dotenv_path=env_path)
 
 from auth_session_manager import AuthSessionManager
 from voice_proxy_handler import VoiceProxyHandler
+from event_streaming import initialize_event_streaming
 
 # Configure logging
 logging.basicConfig(
@@ -107,6 +108,9 @@ voice_proxy_handler = VoiceProxyHandler(
 )
 
 logger.info("🎙️ Voice Proxy initialized (Recording: %s)", "ENABLED" if ENABLE_RECORDING else "DISABLED")
+
+# Initialize Event Streaming Service
+event_streaming = initialize_event_streaming()
 
 logger.info("Application initialized")
 logger.info("On-Prem Auth URL: %s", ONPREM_AUTH_URL)

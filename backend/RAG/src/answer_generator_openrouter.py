@@ -1,7 +1,7 @@
 import os
 import time
 import logging
-from openai import AzureOpenAI
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,12 +9,17 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-class AnswerGenerator:
+class AnswerGeneratorOpenRouter:
+    """
+    Answer Generator using OpenRouter API.
+    
+    This is an alternative to the Azure OpenAI-based answer generator,
+    using OpenRouter's API to access various LLM models.
+    """
+    
     def __init__(self):
-        self.api_key = os.getenv("AZURE_OPENAI_API_KEY")
-        self.api_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        self.api_version = os.getenv("AZURE_OPENAI_API_VERSION")
-        self.deployment_name = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT")
+        self.api_key = os.getenv("OPENROUTER_API_KEY")
+        self.model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
         self.client = None
         self.system_prompt = """You are a helpful assistant that answers questions based on provided context.
 Always use the provided context to answer questions accurately.
@@ -23,17 +28,22 @@ Keep answers concise and well-structured.
 Format your answer in a clear, readable way."""
 
     def initialize(self):
-        """Initialize Azure OpenAI chat model."""
+        """Initialize OpenRouter client."""
         try:
-            self.client = AzureOpenAI(
-                api_key=self.api_key,
-                api_version=self.api_version,
-                azure_endpoint=self.api_endpoint
+            if not self.api_key:
+                logger.error("OPENROUTER_API_KEY not found in environment variables")
+                return False
+            
+            # Initialize OpenAI client with OpenRouter endpoint
+            self.client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=self.api_key
             )
-            logger.info(f"Chat model '{self.deployment_name}' initialized.")
+            
+            logger.info(f"OpenRouter chat model '{self.model}' initialized.")
             return True
         except Exception as e:
-            logger.error(f"Error initializing chat model: {e}")
+            logger.error(f"Error initializing OpenRouter client: {e}")
             return False
 
     def set_system_prompt(self, prompt):
@@ -41,7 +51,7 @@ Format your answer in a clear, readable way."""
         self.system_prompt = prompt
 
     def generate_answer(self, question, context_documents, max_tokens=1000):
-        """Generate an answer based on retrieved documents."""
+        """Generate an answer based on retrieved documents using OpenRouter."""
         try:
             # Build context from documents
             context = self._build_context(context_documents)
@@ -74,10 +84,14 @@ ANSWER:"""
             
             # Stream the response to capture first token timing
             response = self.client.chat.completions.create(
-                model=self.deployment_name,
+                model=self.model,
                 messages=messages,
-                max_completion_tokens=max_tokens,
-                stream=True
+                max_tokens=max_tokens,
+                stream=True,
+                extra_headers={
+                    "HTTP-Referer": "https://github.com/your-repo",  # Optional: for rankings
+                    "X-Title": "Azure Voice Live RAG"  # Optional: for rankings
+                }
             )
             
             for chunk in response:
@@ -97,9 +111,9 @@ ANSWER:"""
             
             # Log timing only if we got content
             if first_byte_time is not None:
-                logger.info(f"[TIMING] LLM generation: First token in {first_byte_time:.2f}s, All tokens in {total_time:.2f}s ({token_count} tokens)")
+                logger.info(f"[TIMING] OpenRouter LLM generation: First token in {first_byte_time:.2f}s, All tokens in {total_time:.2f}s ({token_count} tokens)")
             else:
-                logger.warning(f"[TIMING] LLM generation: No tokens received in {total_time:.2f}s")
+                logger.warning(f"[TIMING] OpenRouter LLM generation: No tokens received in {total_time:.2f}s")
             
             # Return dict with answer and timing data
             return {
@@ -109,7 +123,7 @@ ANSWER:"""
                 "token_count": token_count
             }
         except Exception as e:
-            logger.error(f"Error generating answer: {e}")
+            logger.error(f"Error generating answer with OpenRouter: {e}")
             return None
 
     def _build_context(self, documents):

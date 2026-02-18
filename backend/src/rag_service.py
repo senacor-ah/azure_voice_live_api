@@ -5,9 +5,12 @@ This module provides a synchronous wrapper around the RAG pipeline
 for integration with the Azure Voice Live agent as a function tool.
 """
 
+import asyncio
 import logging
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
@@ -27,6 +30,10 @@ from blob_storage import BlobStorageManager
 from embeddings import EmbeddingManager
 from vector_search import VectorSearchManager
 from answer_generator import AnswerGenerator
+from answer_generator_openrouter import AnswerGeneratorOpenRouter
+
+# Import event streaming for real-time monitoring
+from event_streaming import get_event_streaming_service
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +67,25 @@ class RAGService:
             self.blob_manager = BlobStorageManager()
             self.embedding_manager = EmbeddingManager()
             self.search_manager = VectorSearchManager()
-            self.answer_generator = AnswerGenerator()
+            
+            # Initialize event streaming service
+            self.event_streaming = get_event_streaming_service()
+            
+            # Choose answer generator based on environment variable
+            # Set USE_OPENROUTER=true in .env to use OpenRouter instead of Azure OpenAI
+            use_openrouter = os.getenv("USE_OPENROUTER", "false").lower() == "true"
+            
+            if use_openrouter:
+                logger.info("🔀 Using OpenRouter for answer generation")
+                self.answer_generator = AnswerGeneratorOpenRouter()
+                # Also initialize Azure OpenAI for background benchmarking
+                logger.info("📊 Initializing Azure OpenAI for background benchmarking")
+                self.benchmark_generator = AnswerGenerator()
+            else:
+                logger.info("🔀 Using Azure OpenAI for answer generation")
+                self.answer_generator = AnswerGenerator()
+                self.benchmark_generator = None  # No benchmarking needed
+            
             self._initialized = False
             
             # Customize system prompt for voice interaction
@@ -105,6 +130,25 @@ class RAGService:
     - Keine Markdown-Formatierung.
     """
     
+    def _publish_event_in_thread(self, coro):
+        """
+        Helper method to publish events asynchronously from synchronous context.
+        
+        Args:
+            coro: Coroutine to execute
+        """
+        def run():
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(coro)
+                loop.close()
+            except Exception as e:
+                logger.debug(f"Failed to publish event: {e}")
+        
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+    
     def initialize(self) -> bool:
         """
         Initialize all RAG pipeline components.
@@ -139,6 +183,14 @@ class RAGService:
                 logger.error("Failed to initialize answer generator")
                 return False
             
+            # Initialize benchmark generator if it exists
+            if self.benchmark_generator is not None:
+                if not self.benchmark_generator.initialize():
+                    logger.warning("Failed to initialize benchmark generator (Azure OpenAI) - continuing without benchmarking")
+                    self.benchmark_generator = None
+                else:
+                    logger.info("✅ Benchmark generator (Azure OpenAI) initialized")
+            
             self._initialized = True
             logger.info("✅ RAG Service initialized successfully")
             return True
@@ -151,7 +203,9 @@ class RAGService:
         self,
         question: str,
         top_k: int = 5,
-        max_tokens: int = 2000  # Increased for better answer generation
+        max_tokens: int = 2000,  # Increased for better answer generation
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Query the RAG system with a question.
@@ -160,6 +214,8 @@ class RAGService:
             question: User's question in German
             top_k: Number of documents to retrieve
             max_tokens: Maximum tokens in generated answer
+            session_id: Optional session ID for event streaming
+            user_id: Optional user ID for event streaming
             
         Returns:
             Dict containing:
@@ -177,17 +233,35 @@ class RAGService:
         try:
             logger.info(f"📝 RAG Query: {question[:100]}...")
             
-            # Generate embedding for question
+            # Generate embedding for question (with timing)
+            embedding_start = time.time()
             query_embedding = self.embedding_manager.generate_embedding(question)
+            embedding_time_ms = (time.time() - embedding_start) * 1000
+            
             if query_embedding is None:
                 return {
                     "success": False,
                     "error": "Fehler beim Generieren des Embeddings"
                 }
             
-            # Search for relevant documents
+            logger.info(f"⏱️ Embedding generated in {embedding_time_ms:.2f}ms")
+            
+            # Publish embedding completed event (thread-safe async)
+            if session_id and self.event_streaming.enabled:
+                self._publish_event_in_thread(
+                    self.event_streaming.publish_rag_embedding_completed_async(
+                        session_id=session_id,
+                        question=question[:100],  # Truncate for event
+                        embedding_time_ms=embedding_time_ms,
+                        user_id=user_id
+                    )
+                )
+            
+            # Search for relevant documents (with timing)
             logger.info(f"🔍 Searching for top {top_k} Chunks...")
+            search_start = time.time()
             results = self.search_manager.vector_search(query_embedding, top_k=top_k)
+            search_time_ms = (time.time() - search_start) * 1000
             
             if not results:
                 return {
@@ -196,23 +270,94 @@ class RAGService:
                     "sources": []
                 }
             
-            logger.info(f"✅ Found {len(results)} relevant Chunks")
+            logger.info(f"✅ Found {len(results)} relevant Chunks in {search_time_ms:.2f}ms")
+            
+            # Prepare top 5 chunks for event streaming (simplified)
+            top_chunks = [
+                {
+                    "source": doc.get("source", "Unknown"),
+                    "score": doc.get("score", 0),
+                    "content_preview": doc.get("content", "")[:150]  # First 150 chars
+                }
+                for doc in results[:5]
+            ]
+            
+            # Publish vector search completed event (thread-safe async)
+            if session_id and self.event_streaming.enabled:
+                self._publish_event_in_thread(
+                    self.event_streaming.publish_rag_vector_search_completed_async(
+                        session_id=session_id,
+                        search_time_ms=search_time_ms,
+                        top_chunks=top_chunks,
+                        user_id=user_id
+                    )
+                )
             
             # Generate answer
             logger.info("🤖 Generating answer...")
-            answer = self.answer_generator.generate_answer(
+            
+            # If benchmark generator exists, run it in parallel in background
+            if self.benchmark_generator is not None:
+                def run_benchmark():
+                    try:
+                        logger.info("📊 [BENCHMARK] Starting Azure OpenAI generation in background...")
+                        benchmark_answer = self.benchmark_generator.generate_answer(
+                            question=question,
+                            context_documents=results,
+                            max_tokens=max_tokens
+                        )
+                        if benchmark_answer:
+                            logger.info("📊 [BENCHMARK] Azure OpenAI generation completed")
+                        else:
+                            logger.warning("📊 [BENCHMARK] Azure OpenAI generation failed")
+                    except Exception as e:
+                        logger.error(f"📊 [BENCHMARK] Error in Azure OpenAI generation: {e}")
+                
+                # Start benchmark in background thread
+                benchmark_thread = threading.Thread(target=run_benchmark, daemon=True)
+                benchmark_thread.start()
+            
+            # Main answer generation (OpenRouter or Azure, depending on config)
+            # Track LLM generation timing
+            llm_start = time.time()
+            answer_result = self.answer_generator.generate_answer(
                 question=question,
                 context_documents=results,
                 max_tokens=max_tokens
             )
             
-            if answer is None:
+            # Calculate total completion time
+            total_completion_time_ms = (time.time() - llm_start) * 1000
+            
+            if answer_result is None:
                 return {
                     "success": False,
                     "error": "Fehler beim Generieren der Antwort"
                 }
             
-            logger.info("✅ Answer generated successfully")
+            # Extract answer and timing info from result dict
+            if isinstance(answer_result, dict):
+                answer = answer_result.get("answer", "")
+                # Try to get first token time from result if available
+                first_token_time_ms = answer_result.get("first_token_time_ms", total_completion_time_ms * 0.1)  # Estimate if not available
+            else:
+                answer = answer_result
+                # Estimate first token time as 10% of total time
+                first_token_time_ms = total_completion_time_ms * 0.1
+            
+            logger.info(f"✅ Answer generated successfully ({len(answer)} chars, {total_completion_time_ms:.2f}ms)")
+            
+            # Publish LLM generation completed event (thread-safe async)
+            if session_id and self.event_streaming.enabled:
+                self._publish_event_in_thread(
+                    self.event_streaming.publish_rag_llm_generation_completed_async(
+                        session_id=session_id,
+                        first_token_time_ms=first_token_time_ms,
+                        total_completion_time_ms=total_completion_time_ms,
+                        answer_length=len(answer),
+                        user_id=user_id
+                    )
+                )
             
             return {
                 "success": True,
