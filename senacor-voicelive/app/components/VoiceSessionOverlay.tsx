@@ -31,12 +31,18 @@ export function VoiceSessionOverlay({ isOpen, onClose }: VoiceSessionOverlayProp
     return () => { document.body.style.overflow = '' }
   }, [isOpen])
 
-  if (!isOpen) return null
+  // NOTE: We intentionally do NOT return null when closed.
+  // Keeping VoiceSessionApp always mounted means the RTCPeerConnection and
+  // WebSocket stay alive during client-side page navigation. The overlay
+  // content is hidden via CSS only.
 
   return (
     <>
-      {/* Mobile: fullscreen overlay */}
-      <div className="md:hidden fixed inset-0 z-[100]">
+      {/* Mobile: fullscreen overlay – hidden via inline style when closed */}
+      <div
+        className="md:hidden fixed inset-0 z-[100]"
+        style={{ display: isOpen ? '' : 'none' }}
+      >
         <div className="relative w-full h-full flex flex-col">
           <button
             onClick={onClose}
@@ -50,10 +56,10 @@ export function VoiceSessionOverlay({ isOpen, onClose }: VoiceSessionOverlayProp
         </div>
       </div>
 
-      {/* Desktop: chat-widget popup above the button */}
+      {/* Desktop: chat-widget popup above the button – hidden via inline style when closed */}
       <div
         className="hidden md:block fixed z-[100] chat-widget"
-        style={{ bottom: '96px', right: '32px' }}
+        style={{ bottom: '96px', right: '32px', display: isOpen ? '' : 'none' }}
       >
         <div
           className="relative w-[400px] rounded-3xl overflow-hidden"

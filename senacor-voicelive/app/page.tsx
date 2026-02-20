@@ -1,6 +1,6 @@
 import { verifySession } from '@/app/lib/dal'
-import { AvatarLaunchButton } from '@/app/components/AvatarLaunchButton'
 import { StickyHeader } from '@/app/components/StickyHeader'
+import Link from 'next/link'
 
 export default async function Home() {
   const session = await verifySession()
@@ -12,7 +12,7 @@ export default async function Home() {
       <StickyHeader userName={session.name} />
 
       {/* ── HERO ── */}
-      <section className="relative min-h-screen flex items-center">
+      <section id="hero" className="relative min-h-screen flex items-center">
 
         {/* Background subtle gradient */}
         <div className="absolute inset-0 bg-gradient-to-br from-[#e8e8e8] via-[#ebebeb] to-[#dcdcdc]" />
@@ -34,9 +34,9 @@ export default async function Home() {
                 <button className="bg-gray-900 text-white text-sm font-semibold px-7 py-3.5 rounded-full hover:bg-gray-700 transition-colors shadow-lg">
                   Jetzt starten
                 </button>
-                <a href="#" className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors underline underline-offset-4">
-                  Mehr erfahren
-                </a>
+                <Link href="/produkte" className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors underline underline-offset-4">
+                  Preise & Leistungen
+                </Link>
               </div>
 
               {/* Stats row */}
@@ -155,7 +155,7 @@ export default async function Home() {
       </section>
 
       {/* ── FEATURES STRIP ── */}
-      <section className="bg-white py-16">
+      <section id="vorteile" className="bg-white py-16">
         <div className="max-w-7xl mx-auto px-6 lg:px-12">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             {[
@@ -203,7 +203,7 @@ export default async function Home() {
       </section>
 
       {/* ── UNSERE PRODUKTE ── */}
-      <section className="py-24 bg-[#e8e8e8]">
+      <section id="produkte" className="py-24 bg-[#e8e8e8]">
         <div className="max-w-7xl mx-auto px-6 lg:px-12">
           <div className="mb-14">
             <p className="text-sm font-semibold tracking-widest uppercase mb-3" style={{color:'#7da0d7'}}>Produktwelt</p>
@@ -227,12 +227,12 @@ export default async function Home() {
                 Ihr flexibles Alltagskonto – kostenlos, digital und immer griffbereit.
                 Mit integrierter Ausgabenanalyse und sofortigen Push-Benachrichtigungen.
               </p>
-              <a href="#" className="text-sm font-semibold inline-flex items-center gap-2 group-hover:gap-3 transition-all" style={{color:'#7da0d7'}}>
+              <Link href="/produkte#konten" className="text-sm font-semibold inline-flex items-center gap-2 group-hover:gap-3 transition-all" style={{color:'#7da0d7'}}>
                 Mehr erfahren
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
-              </a>
+              </Link>
             </div>
 
             {/* Product 2 */}
@@ -247,12 +247,12 @@ export default async function Home() {
                 Einfach entspannt finanzieren – mit fairen Konditionen, transparenter
                 Ratenzahlung und sofortiger Online-Entscheidung.
               </p>
-              <a href="#" className="text-sm font-semibold inline-flex items-center gap-2 group-hover:gap-3 transition-all" style={{color:'#7da0d7'}}>
+              <Link href="/produkte#kredit" className="text-sm font-semibold inline-flex items-center gap-2 group-hover:gap-3 transition-all" style={{color:'#7da0d7'}}>
                 Mehr erfahren
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
-              </a>
+              </Link>
             </div>
 
             {/* Product 3 */}
@@ -267,12 +267,12 @@ export default async function Home() {
                 Ihr Vermögen intelligent wachsen lassen. ETF-Sparpläne, Aktienhandel
                 und KI-gestützte Anlageempfehlungen – alles in einer App.
               </p>
-              <a href="#" className="text-sm font-semibold inline-flex items-center gap-2 group-hover:gap-3 transition-all" style={{color:'#7da0d7'}}>
+              <Link href="/produkte#wertpapiere" className="text-sm font-semibold inline-flex items-center gap-2 group-hover:gap-3 transition-all" style={{color:'#7da0d7'}}>
                 Mehr erfahren
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
-              </a>
+              </Link>
             </div>
 
             {/* Product 4 */}
@@ -287,19 +287,19 @@ export default async function Home() {
                 Ihr persönlicher KI-Avatar berät Sie rund um die Uhr –
                 per Sprache, jederzeit erreichbar und immer auf dem neuesten Stand.
               </p>
-              <a href="#" className="text-sm font-semibold inline-flex items-center gap-2 group-hover:gap-3 transition-all" style={{color:'#7da0d7'}}>
+              <Link href="/produkte" className="text-sm font-semibold inline-flex items-center gap-2 group-hover:gap-3 transition-all" style={{color:'#7da0d7'}}>
                 Mehr erfahren
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
-              </a>
+              </Link>
             </div>
           </div>
         </div>
       </section>
 
       {/* ── KOMPETENZEN ── */}
-      <section className="py-24 bg-white">
+      <section id="kompetenzen" className="py-24 bg-white">
         <div className="max-w-7xl mx-auto px-6 lg:px-12">
           <div className="grid lg:grid-cols-2 gap-16 items-center">
             <div>
@@ -331,7 +331,7 @@ export default async function Home() {
       </section>
 
       {/* ── WIR SIND EIN TEAM ── */}
-      <section className="py-24 bg-[#e8e8e8]">
+      <section id="team" className="py-24 bg-[#e8e8e8]">
         <div className="max-w-7xl mx-auto px-6 lg:px-12">
           <div className="grid lg:grid-cols-2 gap-16 items-center">
             {/* Image placeholder */}
@@ -375,7 +375,7 @@ export default async function Home() {
       </section>
 
       {/* ── AKTUELLE THEMEN ── */}
-      <section className="py-24 bg-white">
+      <section id="neuigkeiten" className="py-24 bg-white">
         <div className="max-w-7xl mx-auto px-6 lg:px-12">
           <div className="flex items-end justify-between mb-14">
             <div>
@@ -473,8 +473,6 @@ export default async function Home() {
         </div>
       </footer>
 
-      {/* ── FLOATING AI AVATAR BUTTON ── */}
-      <AvatarLaunchButton />
     </div>
   )
 }

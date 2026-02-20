@@ -33,12 +33,23 @@ export function VoiceSessionApp() {
   const [pendingTransfer, setPendingTransfer] = useState<any>(null);
   const [transferCallId, setTransferCallId] = useState<string | null>(null);
   const [hasVideoConnection, setHasVideoConnection] = useState(false);
+  const [isLoadingTransfer, setIsLoadingTransfer] = useState(false);
+  const [showTransferModal, setShowTransferModal] = useState(false);
   
   // Appointment Booking States
   const [appointmentData, setAppointmentData] = useState<any>(null);
   const [appointmentCallId, setAppointmentCallId] = useState<string | null>(null);
   const [isLoadingAppointments, setIsLoadingAppointments] = useState(false);
   const [showAppointmentModal, setShowAppointmentModal] = useState(false);
+  
+  // Speech Coordinator: gate UI actions until avatar/audio finishes speaking
+  const uiActionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Track which UI action is pending: 'appointment' | 'transfer' | null
+  const pendingUiActionRef = useRef<'appointment' | 'transfer' | null>(null);
+  
+  // Avatar playback drain delay (ms) – how long after response.done to wait
+  // for WebRTC/avatar audio buffer to drain. Tunable.
+  const AVATAR_PLAYBACK_DRAIN_MS = 2000;
   
   // Refs
   const voiceClientRef = useRef<AuthenticatedVoiceClient | null>(null);
@@ -77,8 +88,9 @@ export function VoiceSessionApp() {
   // Voice Client Setup
   const initializeVoiceClient = useCallback(() => {
     if (!voiceClientRef.current) {
-      // Backend URL aus .env (wie im alten Frontend)
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'ws://localhost:5001';
+      // WebSocket URL: derive from current origin (same Next.js server) or override via env
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || `${protocol}//${window.location.host}`;
       console.log('🔗 Connecting to backend:', backendUrl);
       
       const client = new AuthenticatedVoiceClient(backendUrl);
@@ -145,14 +157,65 @@ export function VoiceSessionApp() {
         setHasVideoConnection(true);
       });
       
-      // Event Handler: Response Done (Agent finished speaking)
+      // Event Handler: Response Done (Agent finished generating all audio)
+      // This is the PRIMARY gate signal for showing UI actions.
       client.onResponseDone(() => {
-        console.log('✅ Response done');
+        const pendingAction = pendingUiActionRef.current;
+        if (!pendingAction) {
+          console.log('✅ Response done (no pending UI actions)');
+          return;
+        }
+        
+        console.log(`✅ Response done – pending UI action: ${pendingAction}`);
+        
+        // All audio has been GENERATED. Now wait for playback to finish.
+        let delayMs = 0;
+        
+        if (client.isAvatarMode()) {
+          // Avatar mode: audio is streamed via WebRTC – we can't measure exact
+          // playback time, so use a conservative drain delay.
+          delayMs = AVATAR_PLAYBACK_DRAIN_MS;
+          console.log(`⏳ Avatar mode: waiting ${delayMs}ms for WebRTC audio drain`);
+        } else {
+          // Non-avatar mode: we schedule PCM chunks to AudioContext.
+          // Compute remaining playback time from the cursor.
+          const remainingSec = Math.max(0, client.getPlaybackEndTime() - client.getAudioContextTime());
+          delayMs = remainingSec * 1000 + 200; // +200ms safety margin
+          console.log(`⏳ Non-avatar mode: waiting ${delayMs.toFixed(0)}ms for local audio drain`);
+        }
+        
+        // Clear any existing timer (safety)
+        if (uiActionTimerRef.current) {
+          clearTimeout(uiActionTimerRef.current);
+        }
+        
+        uiActionTimerRef.current = setTimeout(() => {
+          // Double-check we weren't interrupted (barge-in)
+          const action = pendingUiActionRef.current;
+          if (!action) {
+            uiActionTimerRef.current = null;
+            return;
+          }
+          
+          if (action === 'appointment') {
+            console.log('📅 Playback drained – showing appointment modal NOW');
+            setShowAppointmentModal(true);
+            setIsLoadingAppointments(false);
+          } else if (action === 'transfer') {
+            console.log('💸 Playback drained – showing transfer modal NOW');
+            setShowTransferModal(true);
+            setIsLoadingTransfer(false);
+          }
+          
+          pendingUiActionRef.current = null;
+          uiActionTimerRef.current = null;
+        }, delayMs);
       });
       
-      // Event Handler: Audio Transcript Done (BETTER - agent REALLY finished speaking)
+      // Event Handler: Audio Transcript Done (transcript text completed)
+      // Used only for adding AI messages to the chat – NOT for UI gating.
       client.onAudioTranscriptDone((transcript) => {
-        console.log('🎤 Audio transcript done - agent finished speaking:', transcript);
+        console.log('🎤 Audio transcript done:', transcript);
         
         // Add the AI transcript to the message list
         if (transcript && transcript.trim()) {
@@ -166,16 +229,6 @@ export function VoiceSessionApp() {
             },
           ]);
         }
-        
-        // Use functional state updates to access current values
-        setIsLoadingAppointments(currentLoading => {
-          if (currentLoading) {
-            console.log('📅 Agent finished speaking - showing appointment modal NOW');
-            setShowAppointmentModal(true);
-            return false;
-          }
-          return currentLoading;
-        });
       });
       
       // Event Handler: Function Call from Agent (Banking & Appointments)
@@ -187,6 +240,7 @@ export function VoiceSessionApp() {
           // Parse arguments if they come as string
           const parsedArgs = typeof args === 'string' ? JSON.parse(args) : args;
           
+          // Cache transfer data but don't show modal yet – wait for speech to finish
           setPendingTransfer({
             id: callId,
             recipient: parsedArgs.recipient,
@@ -196,6 +250,11 @@ export function VoiceSessionApp() {
             purpose: parsedArgs.purpose || undefined
           });
           setTransferCallId(callId);
+          setIsLoadingTransfer(true);
+          setShowTransferModal(false);
+          pendingUiActionRef.current = 'transfer';
+          
+          console.log('🔄 Waiting for agent to finish speaking before showing transfer modal...');
         } else if (functionName === 'termine_anzeigen') {
           // WORKFLOW: Appointment data with workflow state
           const parsedArgs = typeof args === 'string' ? JSON.parse(args) : args;
@@ -212,8 +271,33 @@ export function VoiceSessionApp() {
           setAppointmentCallId(callId);
           setIsLoadingAppointments(true);
           setShowAppointmentModal(false);
+          pendingUiActionRef.current = 'appointment';
           
-          console.log('🔄 Waiting for agent response to finish before showing modal...');
+          console.log('🔄 Waiting for agent to finish speaking before showing modal...');
+        }
+      });
+      
+      // Event Handler: Barge-in (user starts speaking while agent is talking)
+      // Cancel any pending UI actions – the user interrupted before hearing the full response.
+      client.onSpeechStarted(() => {
+        const pendingAction = pendingUiActionRef.current;
+        if (pendingAction) {
+          console.log(`🚫 Barge-in detected – cancelling pending ${pendingAction} modal`);
+          
+          // Cancel the scheduled timer
+          if (uiActionTimerRef.current) {
+            clearTimeout(uiActionTimerRef.current);
+            uiActionTimerRef.current = null;
+          }
+          
+          // Drop the pending action – the turn was not fully spoken
+          if (pendingAction === 'appointment') {
+            setIsLoadingAppointments(false);
+          } else if (pendingAction === 'transfer') {
+            setIsLoadingTransfer(false);
+          }
+          pendingUiActionRef.current = null;
+          // Keep data/callId so the agent can re-trigger if needed
         }
       });
       
@@ -242,6 +326,13 @@ export function VoiceSessionApp() {
   }, [isMicActive, status]);
 
   const handleDisconnect = useCallback(() => {
+    // Cancel any pending speech coordinator timers
+    if (uiActionTimerRef.current) {
+      clearTimeout(uiActionTimerRef.current);
+      uiActionTimerRef.current = null;
+    }
+    pendingUiActionRef.current = null;
+    
     if (voiceClientRef.current) {
       voiceClientRef.current.disconnect();
       voiceClientRef.current = null;
@@ -252,6 +343,8 @@ export function VoiceSessionApp() {
     setMessages([]);
     setPendingTransfer(null);
     setTransferCallId(null);
+    setShowTransferModal(false);
+    setIsLoadingTransfer(false);
     setAppointmentData(null);
     setAppointmentCallId(null);
     setShowAppointmentModal(false);
@@ -320,6 +413,8 @@ export function VoiceSessionApp() {
       });
       setPendingTransfer(null);
       setTransferCallId(null);
+      setShowTransferModal(false);
+      setIsLoadingTransfer(false);
     }
   }, [transferCallId]);
 
@@ -331,6 +426,8 @@ export function VoiceSessionApp() {
       });
       setPendingTransfer(null);
       setTransferCallId(null);
+      setShowTransferModal(false);
+      setIsLoadingTransfer(false);
     }
   }, [transferCallId]);
 
@@ -478,13 +575,15 @@ export function VoiceSessionApp() {
 
       </div>
 
-      {/* Transfer Confirmation Modal */}
-      <TransferConfirmation
-        transfer={pendingTransfer}
-        isOpen={!!pendingTransfer}
-        onConfirm={handleTransferConfirm}
-        onReject={handleTransferReject}
-      />
+      {/* Transfer Confirmation Modal – gated by Speech Coordinator */}
+      {showTransferModal && (
+        <TransferConfirmation
+          transfer={pendingTransfer}
+          isOpen={showTransferModal}
+          onConfirm={handleTransferConfirm}
+          onReject={handleTransferReject}
+        />
+      )}
 
       {/* Appointment Booking Modal */}
       {appointmentData && showAppointmentModal && (
@@ -495,6 +594,16 @@ export function VoiceSessionApp() {
           onSelect={handleAppointmentSelect}
           onCancel={handleAppointmentCancel}
         />
+      )}
+
+      {/* Loading Overlay for Transfers */}
+      {isLoadingTransfer && (
+        <div className="fixed inset-0 backdrop-blur-sm z-50 flex items-center justify-center" style={{background: 'rgba(0,0,0,0.35)'}}>
+          <div className="rounded-2xl p-8 flex flex-col items-center gap-4" style={{background: '#fff', boxShadow: '0 8px 32px rgba(0,0,0,0.15)'}}>
+            <div className="w-12 h-12 border-4 border-t-transparent rounded-full animate-spin" style={{borderColor: '#7da0d7', borderTopColor: 'transparent'}} />
+            <p className="text-lg font-medium">Überweisung wird vorbereitet...</p>
+          </div>
+        </div>
       )}
 
       {/* Loading Overlay for Appointments */}

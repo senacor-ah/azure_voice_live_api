@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { LogoutButton } from '@/app/components/LogoutButton'
 
 interface StickyHeaderProps {
@@ -33,14 +34,20 @@ export function StickyHeader({ userName }: StickyHeaderProps) {
 
         {/* Nav Links */}
         <nav className="hidden md:flex items-center gap-8">
-          {['Übersicht', 'Produkte', 'Sicherheit', 'Kontakt'].map((item) => (
-            <a
-              key={item}
-              href="#"
+          {[
+            { label: 'Übersicht', href: '/#hero' },
+            { label: 'Produkte', href: '/#produkte' },
+            { label: 'Preise & Leistungen', href: '/produkte' },
+            { label: 'Kompetenzen', href: '/#kompetenzen' },
+            { label: 'Neuigkeiten', href: '/#neuigkeiten' },
+          ].map(({ label, href }) => (
+            <Link
+              key={label}
+              href={href}
               className="text-sm text-gray-600 hover:text-gray-900 transition-colors"
             >
-              {item}
-            </a>
+              {label}
+            </Link>
           ))}
         </nav>
 

@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ============================================================================
-# Azure Voice Live - Development Startup Script
+# Senacor VoiceLive - Development Startup Script
 # ============================================================================
-# Startet Frontend und Backend mit automatischer Port-Bereinigung
+# Startet den kombinierten Next.js + WebSocket Server (senacor-voicelive)
 #
 # Usage: ./start.sh
 # ============================================================================
@@ -18,12 +18,12 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Konfiguration
-FRONTEND_PORT=3000
-BACKEND_PORT=5001
+SERVER_PORT=3000
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NEXTJS_DIR="${PROJECT_ROOT}/senacor-voicelive"
 
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}   Azure Voice Live - Development Server Startup${NC}"
+echo -e "${BLUE}   Senacor VoiceLive - Development Server Startup${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
@@ -33,31 +33,24 @@ echo ""
 kill_port_process() {
     local port=$1
     local service_name=$2
-    
+
     echo -e "${YELLOW}🔍 Checking port ${port} (${service_name})...${NC}"
-    
-    # Finde Prozess auf dem Port (macOS/Linux kompatibel)
+
     local pid=$(lsof -ti tcp:${port} 2>/dev/null || true)
-    
+
     if [ -z "$pid" ]; then
         echo -e "${GREEN}   ✓ Port ${port} ist frei${NC}"
         return 0
     fi
-    
+
     echo -e "${RED}   ⚠ Port ${port} wird bereits verwendet (PID: ${pid})${NC}"
-    
-    # Prozess-Info anzeigen
     local process_info=$(ps -p ${pid} -o comm= 2>/dev/null || echo "unknown")
     echo -e "${RED}      Prozess: ${process_info}${NC}"
-    
-    # Prozess beenden
+
     echo -e "${YELLOW}   → Beende Prozess...${NC}"
     kill -9 ${pid} 2>/dev/null || true
-    
-    # Warte kurz
     sleep 1
-    
-    # Verify
+
     local check_pid=$(lsof -ti tcp:${port} 2>/dev/null || true)
     if [ -z "$check_pid" ]; then
         echo -e "${GREEN}   ✓ Port ${port} erfolgreich freigegeben${NC}"
@@ -68,35 +61,13 @@ kill_port_process() {
 }
 
 # ============================================================================
-# Funktion: Virtual Environment Check (Python)
-# ============================================================================
-check_python_venv() {
-    echo -e "${YELLOW}🐍 Checking Python environment...${NC}"
-    
-    cd "${PROJECT_ROOT}/backend"
-    
-    if [ ! -d "venv" ]; then
-        echo -e "${YELLOW}   → Virtual environment nicht gefunden, erstelle...${NC}"
-        python3 -m venv venv
-        source venv/bin/activate
-        pip install --upgrade pip
-        pip install -r requirements.txt
-        echo -e "${GREEN}   ✓ Virtual environment erstellt${NC}"
-    else
-        echo -e "${GREEN}   ✓ Virtual environment gefunden${NC}"
-    fi
-    
-    cd "${PROJECT_ROOT}"
-}
-
-# ============================================================================
 # Funktion: Node Modules Check
 # ============================================================================
 check_node_modules() {
     echo -e "${YELLOW}📦 Checking Node modules...${NC}"
-    
-    cd "${PROJECT_ROOT}/frontend_new"
-    
+
+    cd "${NEXTJS_DIR}"
+
     if [ ! -d "node_modules" ]; then
         echo -e "${YELLOW}   → node_modules nicht gefunden, installiere...${NC}"
         npm install
@@ -104,19 +75,20 @@ check_node_modules() {
     else
         echo -e "${GREEN}   ✓ node_modules gefunden${NC}"
     fi
-    
+
     cd "${PROJECT_ROOT}"
 }
 
 # ============================================================================
-# Funktion: .env Check
+# Funktion: .env.local Check
 # ============================================================================
 check_env_file() {
     echo -e "${YELLOW}⚙️  Checking environment configuration...${NC}"
-    
-    if [ ! -f "${PROJECT_ROOT}/backend/.env" ]; then
-        echo -e "${RED}   ⚠ Backend .env Datei nicht gefunden!${NC}"
-        echo -e "${YELLOW}   → Siehe backend/ENV_CONFIGURATION.md für Setup-Anleitung${NC}"
+
+    if [ ! -f "${NEXTJS_DIR}/.env.local" ]; then
+        echo -e "${RED}   ⚠ senacor-voicelive/.env.local nicht gefunden!${NC}"
+        echo -e "${YELLOW}   → Kopiere .env.example und trage deine Werte ein:${NC}"
+        echo -e "${YELLOW}      cp senacor-voicelive/.env.example senacor-voicelive/.env.local${NC}"
         echo ""
         read -p "   Trotzdem fortfahren? (y/n) " -n 1 -r
         echo
@@ -125,7 +97,7 @@ check_env_file() {
             exit 1
         fi
     else
-        echo -e "${GREEN}   ✓ Backend .env gefunden${NC}"
+        echo -e "${GREEN}   ✓ .env.local gefunden${NC}"
     fi
 }
 
@@ -135,30 +107,20 @@ check_env_file() {
 cleanup() {
     echo ""
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}Shutting down servers...${NC}"
+    echo -e "${YELLOW}Shutting down server...${NC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    
-    # Kill Backend
-    if [ ! -z "$BACKEND_PID" ]; then
-        echo -e "${YELLOW}Stopping Backend (PID: ${BACKEND_PID})...${NC}"
-        kill $BACKEND_PID 2>/dev/null || true
+
+    if [ ! -z "$SERVER_PID" ]; then
+        echo -e "${YELLOW}Stopping server (PID: ${SERVER_PID})...${NC}"
+        kill $SERVER_PID 2>/dev/null || true
     fi
-    
-    # Kill Frontend
-    if [ ! -z "$FRONTEND_PID" ]; then
-        echo -e "${YELLOW}Stopping Frontend (PID: ${FRONTEND_PID})...${NC}"
-        kill $FRONTEND_PID 2>/dev/null || true
-    fi
-    
-    # Ensure ports are freed
-    kill_port_process $BACKEND_PORT "Backend" >/dev/null 2>&1 || true
-    kill_port_process $FRONTEND_PORT "Frontend" >/dev/null 2>&1 || true
-    
-    echo -e "${GREEN}✓ Servers stopped${NC}"
+
+    kill_port_process $SERVER_PORT "Server" >/dev/null 2>&1 || true
+
+    echo -e "${GREEN}✓ Server stopped${NC}"
     exit 0
 }
 
-# Register cleanup handler
 trap cleanup SIGINT SIGTERM
 
 # ============================================================================
@@ -167,83 +129,70 @@ trap cleanup SIGINT SIGTERM
 
 echo -e "${BLUE}Step 1: Port Cleanup${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-kill_port_process $BACKEND_PORT "Backend"
-kill_port_process $FRONTEND_PORT "Frontend"
+kill_port_process $SERVER_PORT "Next.js + WebSocket"
+# Remove stale Next.js dev lock if present
+rm -f "${NEXTJS_DIR}/.next/dev/lock"
 echo ""
 
 echo -e "${BLUE}Step 2: Dependency Check${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-check_python_venv
 check_node_modules
 check_env_file
 echo ""
 
 echo -e "${BLUE}Step 3: Setup Directories${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo -e "${GREEN}📁 Creating logs directory...${NC}"
 mkdir -p "${PROJECT_ROOT}/logs"
-echo -e "${GREEN}   ✓ Logs directory ready${NC}"
+mkdir -p "${NEXTJS_DIR}/recordings"
+echo -e "${GREEN}   ✓ logs/ and recordings/ directories ready${NC}"
 echo ""
 
-echo -e "${BLUE}Step 4: Starting Servers${NC}"
+echo -e "${BLUE}Step 4: Starting Server${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Start Backend
-echo -e "${GREEN}🚀 Starting Backend on port ${BACKEND_PORT}...${NC}"
-cd "${PROJECT_ROOT}/backend"
-source venv/bin/activate
-
-# Export SSL certificate path from certifi
-export SSL_CERT_FILE=$(python -m certifi)
-export REQUESTS_CA_BUNDLE=$(python -m certifi)
-echo -e "${BLUE}   → SSL Certificates: ${SSL_CERT_FILE}${NC}"
-
-export FLASK_ENV=development
-python src/app.py > ../logs/backend.log 2>&1 &
-BACKEND_PID=$!
-echo -e "${GREEN}   → Backend PID: ${BACKEND_PID}${NC}"
+echo -e "${GREEN}🚀 Starting Senacor VoiceLive on port ${SERVER_PORT}...${NC}"
+cd "${NEXTJS_DIR}"
+npx tsx --tsconfig tsconfig.json server.ts > "${PROJECT_ROOT}/logs/server.log" 2>&1 &
+SERVER_PID=$!
+echo -e "${GREEN}   → Server PID: ${SERVER_PID}${NC}"
 cd "${PROJECT_ROOT}"
 
-# Warte kurz damit Backend hochfährt
-sleep 2
-
-# Start Frontend
-echo -e "${GREEN}🚀 Starting Frontend on port ${FRONTEND_PORT}...${NC}"
-cd "${PROJECT_ROOT}/frontend_new"
-npm run dev > ../logs/frontend.log 2>&1 &
-FRONTEND_PID=$!
-echo -e "${GREEN}   → Frontend PID: ${FRONTEND_PID}${NC}"
-cd "${PROJECT_ROOT}"
+# Warte bis der Server hochgefahren ist
+echo -e "${YELLOW}   → Waiting for server to start...${NC}"
+for i in {1..15}; do
+    sleep 1
+    if curl -s http://localhost:${SERVER_PORT}/api/health >/dev/null 2>&1; then
+        echo -e "${GREEN}   ✓ Server is up!${NC}"
+        break
+    fi
+    if [ $i -eq 15 ]; then
+        echo -e "${RED}   ✗ Server did not start in time. Check logs/server.log${NC}"
+    fi
+done
 
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}✓ Servers started successfully!${NC}"
+echo -e "${GREEN}✓ Server started successfully!${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "${BLUE}📍 URLs:${NC}"
-echo -e "   Frontend:  ${GREEN}http://localhost:${FRONTEND_PORT}${NC}"
-echo -e "   Backend:   ${GREEN}http://localhost:${BACKEND_PORT}${NC}"
+echo -e "   App:       ${GREEN}http://localhost:${SERVER_PORT}${NC}"
+echo -e "   Health:    ${GREEN}http://localhost:${SERVER_PORT}/api/health${NC}"
+echo -e "   WebSocket: ${GREEN}ws://localhost:${SERVER_PORT}/ws/voice${NC}"
 echo ""
 echo -e "${BLUE}📋 Logs:${NC}"
-echo -e "   Backend:  tail -f logs/backend.log"
-echo -e "   Frontend: tail -f logs/frontend.log"
+echo -e "   Server:  tail -f logs/server.log"
 echo ""
-echo -e "${YELLOW}Press Ctrl+C to stop all servers${NC}"
+echo -e "${YELLOW}Press Ctrl+C to stop the server${NC}"
 echo ""
 
-# Keep script running and monitor processes
+# Keep script running and monitor process
 while true; do
-    # Check if processes are still running
-    if ! kill -0 $BACKEND_PID 2>/dev/null; then
-        echo -e "${RED}⚠ Backend crashed! Check logs/backend.log${NC}"
+    if ! kill -0 $SERVER_PID 2>/dev/null; then
+        echo -e "${RED}⚠ Server crashed! Check logs/server.log${NC}"
+        tail -20 "${PROJECT_ROOT}/logs/server.log"
         cleanup
     fi
-    
-    if ! kill -0 $FRONTEND_PID 2>/dev/null; then
-        echo -e "${RED}⚠ Frontend crashed! Check logs/frontend.log${NC}"
-        cleanup
-    fi
-    
     sleep 2
 done
 

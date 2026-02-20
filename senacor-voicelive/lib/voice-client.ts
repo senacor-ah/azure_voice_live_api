@@ -37,6 +37,7 @@ export class AuthenticatedVoiceClient {
     private _onResponseDone?: () => void;
     private _onAudioTranscriptDone?: (transcript: string) => void;
     private _onFunctionCall?: (functionName: string, args: any, callId: string) => void;
+    private _onSpeechStarted?: () => void;
     private _onError?: (error: string) => void;
     
     // Video/Avatar element
@@ -162,6 +163,7 @@ export class AuthenticatedVoiceClient {
                 else if (message.type === 'speech.started') {
                     console.log('Speech started (barge-in - clearing audio queue)');
                     this.clearAudioQueue();
+                    this._onSpeechStarted?.();
                 }
                 
                 // Handle response done
@@ -783,8 +785,35 @@ export class AuthenticatedVoiceClient {
         this._onApiResponse = callback;
     }
 
+    /** Called when user starts speaking (barge-in) */
+    onSpeechStarted(callback: () => void): void {
+        this._onSpeechStarted = callback;
+    }
+
     /** Called when an error occurs */
     onError(callback: (error: string) => void): void {
         this._onError = callback;
+    }
+
+    /**
+     * Get the scheduled end time of audio playback (non-avatar mode).
+     * Returns the AudioContext time when the last scheduled chunk will finish.
+     */
+    getPlaybackEndTime(): number {
+        return this.nextPlayTime;
+    }
+
+    /**
+     * Get the current AudioContext time.
+     */
+    getAudioContextTime(): number {
+        return this.audioContext?.currentTime ?? 0;
+    }
+
+    /**
+     * Check if avatar mode is active (audio via WebRTC, not local playback).
+     */
+    isAvatarMode(): boolean {
+        return this.avatarEnabled;
     }
 }
