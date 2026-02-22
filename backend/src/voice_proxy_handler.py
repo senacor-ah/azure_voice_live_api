@@ -1127,6 +1127,15 @@ WICHTIGE REGELN:
                         continue
                     
                     # Handle WebRTC avatar connection
+                    elif msg.get("type") == "session.avatar.ready":
+                        # Frontend signals that WebRTC ICE is connected → safe to trigger initial greeting
+                        logger.info("📹 Avatar WebRTC ready - triggering initial greeting")
+                        if not getattr(session, '_greeting_sent', False):
+                            session._greeting_sent = True
+                            await azure_conn.response.create()
+                            logger.info("🎙️ Initial greeting triggered (avatar mode, after WebRTC ICE connected)")
+                        continue
+                    
                     elif msg.get("type") == "session.avatar.connect":
                         logger.info("📹 Received WebRTC offer from client")
                         try:
@@ -1447,6 +1456,15 @@ WICHTIGE REGELN:
                 
                 if client_message:
                     await self._send_message(client_ws, client_message)
+                    
+                    # Initial greeting (non-avatar): after session is configured, trigger AI to speak first
+                    # Avatar mode uses session.avatar.ready (sent by frontend after WebRTC ICE is connected)
+                    if (client_message.get("type") == "session.updated"
+                            and not getattr(session, '_greeting_sent', False)
+                            and not self.azure_avatar_enabled):
+                        session._greeting_sent = True
+                        logger.info("🎙️ Triggering initial greeting (non-avatar, response.create after session.updated)")
+                        await azure_conn.response.create()
             
             logger.info("Azure event stream ended for session %s (received %d events)", 
                        session.session_id, event_count)

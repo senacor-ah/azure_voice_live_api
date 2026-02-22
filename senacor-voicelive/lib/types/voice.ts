@@ -21,6 +21,27 @@ export const WorkflowState = {
 
 export type WorkflowState = (typeof WorkflowState)[keyof typeof WorkflowState]
 
+/**
+ * Backend-driven state machine for appointment booking.
+ * The orchestrator (not the agent prompt) controls transitions.
+ *
+ * Flow: IDLE → FETCHING → ANNOUNCING_COUNT → AWAITING_UI_SELECTION → CONFIRMED
+ */
+export const AppointmentFlowState = {
+  /** No appointment flow active */
+  IDLE: 'appt_idle',
+  /** termine_abrufen running */
+  FETCHING: 'appt_fetching',
+  /** Agent is announcing how many slots were found (TTS playing) */
+  ANNOUNCING_COUNT: 'appt_announcing_count',
+  /** termine_anzeigen sent to client, waiting for UI selection */
+  AWAITING_UI_SELECTION: 'appt_awaiting_ui_selection',
+  /** User selected a slot via UI, booking confirmed */
+  CONFIRMED: 'appt_confirmed',
+} as const
+
+export type AppointmentFlowState = (typeof AppointmentFlowState)[keyof typeof AppointmentFlowState]
+
 export const AppointmentDataSchema = z.object({
   id: z.string(),
   datum: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD'),
@@ -83,9 +104,20 @@ export interface SessionInfo {
   expiresAt: Date
   createdAt: Date
   azureConnection?: unknown
+  greetingSent?: boolean
   appointmentsCache?: AppointmentCacheData | null
   workflowContext?: WorkflowContext | null
   workflowActive: boolean
+  /** Backend-driven appointment flow state machine */
+  appointmentFlowState?: AppointmentFlowState
+  /** Tracks total audio duration (seconds) for the current response (for drain timing) */
+  responseAudioDurationSec?: number
+  /** Timestamp (ms) when the first audio chunk of the current response was generated */
+  responseAudioFirstChunkTime?: number
+  /** Estimated total TTS duration (ms) based on transcript text length (used in avatar mode) */
+  responseTranscriptTtsDurationMs?: number
+  /** Timestamp (ms) when the transcript for the current response was completed */
+  responseTranscriptDoneTime?: number
 }
 
 export interface AppointmentCacheData {

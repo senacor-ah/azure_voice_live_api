@@ -42,7 +42,7 @@ import { AzureKeyCredential } from '@azure/core-auth'
 import { DefaultAzureCredential } from '@azure/identity'
 
 import type { SessionInfo, WorkflowContext } from '@/lib/types/voice'
-import { WorkflowState } from '@/lib/types/voice'
+import { WorkflowState, AppointmentFlowState } from '@/lib/types/voice'
 import { AuthSessionManager, getAuthSessionManager } from '@/lib/services/auth-session-manager'
 import { getEventStreamingService } from '@/lib/services/event-streaming'
 import { getRagService } from '@/lib/services/rag-service'
@@ -523,20 +523,26 @@ WORKFLOW FÜR ÜBERWEISUNGEN:
 5. Wenn du den Namen und Betrag hast, GENERIERE SELBST eine realistische deutsche IBAN
    (Format: DE + 20 Ziffern, z.B. DE89370400440532013000)
 6. Verwende dann das Tool "ueberweisung_bestaetigen" mit den Daten
-7. Der Kunde kann dann die Überweisung im UI bestätigen oder ablehnen
+7. SAGE dem Kunden SOFORT nach dem Tool-Aufruf:
+   "Ich habe die Überweisungsdetails für dich vorbereitet. Bitte bestätige oder lehne die Überweisung direkt in der Anzeige ab."
+8. WARTE auf das Ergebnis – antworte NICHT erneut bis der Kunde im UI reagiert hat
+9. Nach Bestätigung (approved=true): "Deine Überweisung wurde erfolgreich ausgeführt."
+   Nach Ablehnung (approved=false): "Verstanden, ich habe die Überweisung abgebrochen."
 
 WORKFLOW FÜR TERMINVEREINBARUNG:
-1. Erkenne, wenn der Kunde einen Termin mit seinem Bankberater vereinbaren möchte
-2. SAGE dem Kunden: "Lass mich kurz nachschauen, ob dein Berater Michael Weber Zeit hat"
-3. Verwende DANN das Tool "termine_abrufen" um verfügbare Termine zu generieren
-4. WARTE auf das Ergebnis (du bekommst die Anzahl der gefundenen Termine)
-5. SAGE dem Kunden: "Ich habe [Anzahl] Termine gefunden. Einen Moment bitte..."
-6. Verwende DANN das Tool "termine_anzeigen" um die Termine im UI anzuzeigen
-7. WARTE auf die Auswahl des Kunden (er wählt im UI)
-8. WICHTIG: Wenn der Kunde per Sprache einen Termin nennt, der NICHT in der Liste ist:
-   - SAGE: "Dieser Termin ist leider nicht verfügbar. Bitte wählen Sie einen Termin aus der angezeigten Liste im Interface."
-9. Nur wenn ein gültiger Termin aus der Liste gewählt wurde:
-   - Bestätige: "Perfekt! Dein Termin am [Datum] um [Uhrzeit] Uhr bei Michael Weber ist reserviert."
+
+1. Erkenne, wenn der Kunde einen Termin vereinbaren möchte.
+2. Sage: "Lass mich kurz nachschauen, ob dein Berater Michael Weber Zeit hat."
+3. Rufe das Tool "termine_abrufen" auf – du bekommst die Anzahl der Termine zurück.
+4. Sage: "Ich habe [Anzahl] Termine gefunden. Bitte wähle deinen Wunschtermin direkt in der angezeigten Liste aus."
+   Das System zeigt die Termine AUTOMATISCH im Interface an – du musst nichts weiter tun.
+5. Warte. Antworte NICHT neu, bis der Kunde einen Termin im UI gewählt hat.
+
+EXTREM WICHTIG – TERMIN-AUSWAHL NUR VIA UI:
+- Wenn der Kunde per Sprache einen Termin nennt (z.B. "den ersten", "den zweiten", eine Uhrzeit):
+  Antworte IMMER NUR: "Bitte wähle deinen Wunschtermin direkt in der angezeigten Liste aus."
+- NIEMALS termin_bestaetigen aufrufen, solange kein Termin über das UI gewählt wurde.
+- Wenn ein Termin über das UI gewählt wurde, bestätige: "Perfekt! Dein Termin am [Datum] um [Uhrzeit] Uhr bei Michael Weber ist reserviert."
 
 WORKFLOW FÜR PRODUKTFRAGEN (RAG-WISSENSABFRAGE):
 1. Erkenne Fragen zu Bankprodukten, Preisen, Gebühren, Konditionen, Services
@@ -555,6 +561,10 @@ WICHTIGE REGELN:
 - Bei Terminwünschen: Erwähne Michael Weber und rufe sofort termine_abrufen auf
 - Bei Produktfragen: Verwende IMMER das Tool "wissen_abfragen" - NIEMALS raten!
 - Bei verbotenen Themen: IMMER höflich ablehnen und auf Bankgeschäfte zurücklenken
+- UI-REGEL (HÖCHSTE PRIORITÄT): Immer wenn eine Maske oder Liste im UI angezeigt wird
+  (Überweisungsbestätigung, Terminauswahl), weise den Kunden SOFORT EXPLIZIT darauf hin,
+  dass er die Auswahl oder Bestätigung bitte direkt im Interface vornehmen soll –
+  NIEMALS per Sprache annehmen oder bestätigen!
 `
   }
 
@@ -591,13 +601,7 @@ WICHTIGE REGELN:
       {
         type: 'function',
         name: 'termine_abrufen',
-        description: 'Ruft verfügbare Termine mit dem Bankberater Michael Weber ab.',
-        parameters: { type: 'object', properties: {}, required: [] },
-      } as FunctionTool,
-      {
-        type: 'function',
-        name: 'termine_anzeigen',
-        description: 'Zeigt die abgerufenen Termine im UI an.',
+        description: 'Ruft verfügbare Termine mit dem Bankberater Michael Weber ab. Das System zeigt die Termine anschließend automatisch im Interface an.',
         parameters: { type: 'object', properties: {}, required: [] },
       } as FunctionTool,
       {
@@ -657,13 +661,20 @@ WICHTIGE REGELN:
       // --- Audio Delta ---
       onResponseAudioDelta: async (event: ServerEventResponseAudioDelta) => {
         if (event.delta) {
-          // Record AI audio
-          if (recorder) {
-            try {
-              const audioBuffer = Buffer.from(event.delta as unknown as string, 'base64')
+          // Track audio duration for drain timing
+          try {
+            const audioBuffer = Buffer.from(event.delta as unknown as string, 'base64')
+            const numSamples = audioBuffer.byteLength / 2 // PCM16 = 2 bytes per sample
+            const chunkDurationSec = numSamples / 24000   // 24kHz sample rate
+            session.responseAudioDurationSec = (session.responseAudioDurationSec ?? 0) + chunkDurationSec
+            if (!session.responseAudioFirstChunkTime) {
+              session.responseAudioFirstChunkTime = Date.now()
+            }
+            // Record AI audio
+            if (recorder) {
               recorder.addAiAudio(audioBuffer)
-            } catch { /* ignore recording errors */ }
-          }
+            }
+          } catch { /* ignore recording/tracking errors */ }
           // Forward to client
           this.sendMessage(clientWs, { type: 'audio.delta', audio: event.delta })
         }
@@ -711,6 +722,15 @@ WICHTIGE REGELN:
             avatar: avatarConfig,
           },
         })
+
+        // Initial greeting: trigger AI to speak first
+        // Avatar mode: wait for WebRTC ICE connected (session.avatar.ready from client)
+        // Non-avatar mode: trigger immediately after session is configured
+        if (!session.greetingSent && !this.config.azureAvatarEnabled) {
+          session.greetingSent = true
+          console.log('🎙️ Triggering initial greeting (non-avatar)')
+          await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+        }
       },
 
       // --- Server Error ---
@@ -724,6 +744,11 @@ WICHTIGE REGELN:
       // --- Response Created ---
       onResponseCreated: async (event: ServerEventResponseCreated) => {
         console.log('🎙️ Response started')
+        // Reset audio duration tracking for the new response
+        session.responseAudioDurationSec = 0
+        session.responseAudioFirstChunkTime = undefined
+        session.responseTranscriptTtsDurationMs = undefined
+        session.responseTranscriptDoneTime = undefined
         const responseId = (event.response as Record<string, unknown>)?.id as string | undefined
         await eventStreaming.publishResponseCreated(session.sessionId, responseId, userId)
         this.sendMessage(clientWs, { type: 'response.started', timestamp: new Date().toISOString() })
@@ -733,9 +758,58 @@ WICHTIGE REGELN:
       onResponseDone: async (event: ServerEventResponseDone) => {
         const status = (event as unknown as Record<string, unknown>).status ?? 'unknown'
         console.log(`✅ Response completed (status: ${status})`)
+
+        // ================================================================
+        // STATE MACHINE: Auto-send termine_anzeigen after TTS announcement
+        // ================================================================
+        if (session.appointmentFlowState === AppointmentFlowState.ANNOUNCING_COUNT) {
+          console.log('📅 State Machine: ANNOUNCING_COUNT → AWAITING_UI_SELECTION (auto-sending termine_anzeigen)')
+          session.appointmentFlowState = AppointmentFlowState.AWAITING_UI_SELECTION
+
+          const wfCtx = session.workflowContext
+          if (wfCtx && clientWs) {
+            const functionArguments = {
+              advisor: wfCtx.advisor,
+              appointments: wfCtx.appointments,
+              workflow_state: wfCtx.state,
+            }
+            // Send to client BEFORE response.done so pendingUiActionRef is set in time
+            this.sendMessage(clientWs, {
+              type: 'function_call',
+              name: 'termine_anzeigen',
+              arguments: JSON.stringify(functionArguments),
+              call_id: `sm-termine-anzeigen-${Date.now()}`,
+            })
+          }
+        }
+
+        // Compute estimated remaining playback time for the client's drain timer
+        const totalAudioMs = (session.responseAudioDurationSec ?? 0) * 1000
+        const firstChunkTime = session.responseAudioFirstChunkTime ?? Date.now()
+        const elapsedSinceFirstChunk = Date.now() - firstChunkTime
+        let estimatedRemainingPlaybackMs = Math.max(0, totalAudioMs - elapsedSinceFirstChunk)
+
+        // Fallback for avatar mode: server may not see audio deltas (WebRTC path).
+        // Use transcript-based TTS estimate when audio tracking yields nothing.
+        if (estimatedRemainingPlaybackMs === 0 && session.responseTranscriptTtsDurationMs) {
+          const transcriptDoneTime = session.responseTranscriptDoneTime ?? Date.now()
+          const elapsedSinceTranscript = Date.now() - transcriptDoneTime
+          // Avatar starts speaking roughly when transcript starts generating.
+          // Use full TTS estimate minus the time elapsed since transcript done.
+          estimatedRemainingPlaybackMs = Math.max(0, session.responseTranscriptTtsDurationMs - elapsedSinceTranscript)
+          console.log(`🔊 Audio drain (transcript fallback): ttsEstimate=${session.responseTranscriptTtsDurationMs.toFixed(0)}ms, elapsed=${elapsedSinceTranscript}ms, remaining=${estimatedRemainingPlaybackMs.toFixed(0)}ms`)
+        }
+
+        console.log(`🔊 Audio drain: totalAudio=${totalAudioMs.toFixed(0)}ms, elapsed=${elapsedSinceFirstChunk.toFixed(0)}ms, estRemaining=${estimatedRemainingPlaybackMs.toFixed(0)}ms`)
+
         const responseId = (event.response as Record<string, unknown>)?.id as string | undefined
         await eventStreaming.publishResponseDone(session.sessionId, responseId, String(status), userId)
-        this.sendMessage(clientWs, { type: 'response.done', timestamp: new Date().toISOString() })
+        this.sendMessage(clientWs, {
+          type: 'response.done',
+          timestamp: new Date().toISOString(),
+          estimatedRemainingPlaybackMs: Math.round(estimatedRemainingPlaybackMs),
+          totalAudioDurationMs: Math.round(totalAudioMs),
+        })
       },
 
       // --- Speech Started ---
@@ -758,6 +832,17 @@ WICHTIGE REGELN:
       onResponseAudioTranscriptDone: async (event: ServerEventResponseAudioTranscriptDone) => {
         const transcript = event.transcript ?? ''
         console.log(`📝 AI transcript done: ${transcript}`)
+
+        // Estimate TTS duration from text length for avatar-mode drain timing.
+        // German speech rate: ~13 characters/second (120-140 words/min).
+        // This is used when server doesn't see audio deltas (WebRTC avatar path).
+        if (transcript.trim().length > 0) {
+          const estimatedMs = (transcript.length / 13) * 1000
+          session.responseTranscriptTtsDurationMs = estimatedMs
+          session.responseTranscriptDoneTime = Date.now()
+          console.log(`🔊 TTS estimate from transcript: ${transcript.length} chars → ~${estimatedMs.toFixed(0)}ms`)
+        }
+
         if (recorder) recorder.addEvent('ai_response', { transcript })
         await eventStreaming.publishAiTranscript(session.sessionId, transcript, userId)
         this.sendMessage(clientWs, { type: 'response.audio_transcript.done', transcript })
@@ -876,6 +961,7 @@ WICHTIGE REGELN:
     // Store workflow in session
     session.workflowContext = context as unknown as WorkflowContext
     session.workflowActive = true
+    session.appointmentFlowState = AppointmentFlowState.ANNOUNCING_COUNT
     session.appointmentsCache = {
       advisor: context.advisor,
       appointments: context.appointments,
@@ -913,7 +999,22 @@ WICHTIGE REGELN:
     userId: string,
     clientWs?: import('ws').WebSocket,
   ): Promise<boolean> {
-    console.log('🔧 Backend: Sending appointments to frontend (Workflow HITL)')
+    // The state machine normally handles this automatically via onResponseDone.
+    // This handler only runs if the agent calls termine_anzeigen as a tool
+    // (which it shouldn't anymore since the tool was removed).
+    // If the state machine already sent the UI, skip to avoid duplicates.
+    if (session.appointmentFlowState === AppointmentFlowState.AWAITING_UI_SELECTION) {
+      console.log('⚠️ termine_anzeigen called by agent but UI already sent by state machine — skipping')
+      // Still need to give Azure a function_call_output so it doesn't hang
+      await azureSession.addConversationItem({
+        type: 'function_call_output',
+        callId,
+        output: JSON.stringify({ ui_shown: true, message: 'Already displayed' }),
+      } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
+      return true
+    }
+
+    console.log('🔧 Backend: Sending appointments to frontend (agent-triggered fallback)')
 
     if (!session.workflowContext) {
       console.error('⚠️ No workflow context found')
@@ -921,8 +1022,9 @@ WICHTIGE REGELN:
     }
 
     const context = session.workflowContext
+    session.appointmentFlowState = AppointmentFlowState.AWAITING_UI_SELECTION
 
-    // Enrich arguments with actual appointment data (Python backend did this too)
+    // Enrich arguments with actual appointment data
     const functionArguments = {
       advisor: context.advisor,
       appointments: context.appointments,
@@ -934,22 +1036,16 @@ WICHTIGE REGELN:
       workflow_state: context.state,
     }
 
-    await eventStreaming.publishFunctionCalled(
-      session.sessionId, 'termine_anzeigen', functionArguments, functionOutput, callId, userId,
-    )
-
-    // Send to Azure
-    await azureSession.addConversationItem({
-      type: 'function_call_output',
-      callId,
-      output: JSON.stringify(functionOutput),
-    } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
-
-    await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
-
-    // Forward enriched function_call to client for UI display
-    // We send it ourselves (with enriched arguments) instead of relying on the
-    // default forward which would send empty Azure arguments
+    // HARD GATE – send function_call to client FIRST, before any awaits.
+    //
+    // Azure fires response.function_call_arguments.done → response.done in that
+    // order. Our backend handler is async and awaits network calls below, so
+    // response.done can reach the client before we send function_call — leaving
+    // pendingUiActionRef null when the gate fires, and the modal never shows.
+    //
+    // By sending function_call synchronously (before any await), it is
+    // guaranteed to be enqueued on the WebSocket BEFORE response.done, so the
+    // client sets pendingUiActionRef = 'appointment' in time for the gate.
     if (clientWs) {
       this.sendMessage(clientWs, {
         type: 'function_call',
@@ -959,7 +1055,23 @@ WICHTIGE REGELN:
       })
     }
 
-    return true // Handled — we sent the enriched message ourselves
+    // Now do the async backend bookkeeping (after the client message is sent)
+    await eventStreaming.publishFunctionCalled(
+      session.sessionId, 'termine_anzeigen', functionArguments, functionOutput, callId, userId,
+    )
+
+    // Send function_call_output to Azure so the conversation item is recorded.
+    // Do NOT call response.create: the original response (with the TTS
+    // announcement) must be the one whose response.done triggers the frontend
+    // gate. A new empty response.done would reset agentProducedAudioRef=false
+    // and cause delayMs=0, showing the modal before speech finishes.
+    await azureSession.addConversationItem({
+      type: 'function_call_output',
+      callId,
+      output: JSON.stringify(functionOutput),
+    } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
+
+    return true // Handled — enriched function_call already sent to client above
   }
 
   private async handleTerminBestaetigen(
@@ -992,6 +1104,10 @@ WICHTIGE REGELN:
     } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
 
     await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+
+    // Reset state machine
+    session.appointmentFlowState = AppointmentFlowState.CONFIRMED
+    session.workflowActive = false
 
     console.log('✅ Appointment confirmed')
     return true // Handled
@@ -1081,6 +1197,17 @@ WICHTIGE REGELN:
           // Handle function call results from client
           if (msg.type === 'function_call_result') {
             await this.handleFunctionCallResult(azureSession, msg, session)
+            return
+          }
+
+          // Handle WebRTC avatar ready → trigger initial greeting
+          if (msg.type === 'session.avatar.ready') {
+            console.log('📹 Avatar WebRTC ready - triggering initial greeting')
+            if (!session.greetingSent) {
+              session.greetingSent = true
+              await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+              console.log('🎙️ Initial greeting triggered (avatar mode, after WebRTC ICE connected)')
+            }
             return
           }
 

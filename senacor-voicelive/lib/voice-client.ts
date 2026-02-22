@@ -34,7 +34,8 @@ export class AuthenticatedVoiceClient {
     private _onSessionReady?: (hasAvatar: boolean) => void;
     private _onVideoConnected?: () => void;
     private _onVideoPlaybackStarted?: () => void;
-    private _onResponseDone?: () => void;
+    private _onResponseDone?: (estimatedRemainingPlaybackMs?: number, totalAudioDurationMs?: number) => void;
+    private _onResponseStarted?: () => void;
     private _onAudioTranscriptDone?: (transcript: string) => void;
     private _onFunctionCall?: (functionName: string, args: any, callId: string) => void;
     private _onSpeechStarted?: () => void;
@@ -169,12 +170,13 @@ export class AuthenticatedVoiceClient {
                 // Handle response done
                 else if (message.type === 'response.done') {
                     console.log('Response done');
-                    this._onResponseDone?.();
+                    this._onResponseDone?.(message.estimatedRemainingPlaybackMs, message.totalAudioDurationMs);
                 }
                 
                 // Handle response started
                 else if (message.type === 'response.started') {
                     console.log('Response started');
+                    this._onResponseStarted?.();
                 }
                 
                 // Handle audio transcript done
@@ -572,6 +574,11 @@ export class AuthenticatedVoiceClient {
                 console.log('ICE connection state:', this.peerConnection?.iceConnectionState);
                 if (this.peerConnection?.iceConnectionState === 'connected') {
                     this._onVideoConnected?.();
+                    // Notify backend that WebRTC is ready → backend triggers initial greeting
+                    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                        console.log('Sending session.avatar.ready to backend for initial greeting');
+                        this.ws.send(JSON.stringify({ type: 'session.avatar.ready' }));
+                    }
                 }
             };
             
@@ -766,8 +773,13 @@ export class AuthenticatedVoiceClient {
     }
 
     /** Called when response is done */
-    onResponseDone(callback: () => void): void {
+    onResponseDone(callback: (estimatedRemainingPlaybackMs?: number, totalAudioDurationMs?: number) => void): void {
         this._onResponseDone = callback;
+    }
+
+    /** Called when a new response starts being generated */
+    onResponseStarted(callback: () => void): void {
+        this._onResponseStarted = callback;
     }
 
     /** Called when audio transcript is done */

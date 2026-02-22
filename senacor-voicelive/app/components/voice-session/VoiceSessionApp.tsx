@@ -46,10 +46,14 @@ export function VoiceSessionApp() {
   const uiActionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track which UI action is pending: 'appointment' | 'transfer' | null
   const pendingUiActionRef = useRef<'appointment' | 'transfer' | null>(null);
+  // Track whether the agent actually produced audio in the current response
+  const agentProducedAudioRef = useRef<boolean>(false);
   
-  // Avatar playback drain delay (ms) – how long after response.done to wait
-  // for WebRTC/avatar audio buffer to drain. Tunable.
-  const AVATAR_PLAYBACK_DRAIN_MS = 2000;
+  // Extra buffer (ms) added on top of estimated remaining playback time
+  // to account for WebRTC pipeline latency and avatar rendering.
+  const AVATAR_PIPELINE_BUFFER_MS = 1500;
+  // Fallback drain delay if server doesn't provide audio timing
+  const AVATAR_FALLBACK_DRAIN_MS = 4500;
   
   // Refs
   const voiceClientRef = useRef<AuthenticatedVoiceClient | null>(null);
@@ -157,31 +161,56 @@ export function VoiceSessionApp() {
         setHasVideoConnection(true);
       });
       
+      // Reset audio-produced flag on every new response
+      client.onResponseStarted(() => {
+        agentProducedAudioRef.current = false;
+      });
+
       // Event Handler: Response Done (Agent finished generating all audio)
       // This is the PRIMARY gate signal for showing UI actions.
-      client.onResponseDone(() => {
+      // The server sends estimated remaining playback time based on actual audio duration.
+      client.onResponseDone((estimatedRemainingPlaybackMs?: number, totalAudioDurationMs?: number) => {
         const pendingAction = pendingUiActionRef.current;
         if (!pendingAction) {
           console.log('✅ Response done (no pending UI actions)');
           return;
         }
         
-        console.log(`✅ Response done – pending UI action: ${pendingAction}`);
+        console.log(`✅ Response done – pending UI action: ${pendingAction}, serverEstRemaining=${estimatedRemainingPlaybackMs}ms, totalAudio=${totalAudioDurationMs}ms`);
         
         // All audio has been GENERATED. Now wait for playback to finish.
         let delayMs = 0;
         
-        if (client.isAvatarMode()) {
-          // Avatar mode: audio is streamed via WebRTC – we can't measure exact
-          // playback time, so use a conservative drain delay.
-          delayMs = AVATAR_PLAYBACK_DRAIN_MS;
-          console.log(`⏳ Avatar mode: waiting ${delayMs}ms for WebRTC audio drain`);
+        if (!agentProducedAudioRef.current) {
+          // Agent produced no audio (pure function-call response) – show UI immediately
+          delayMs = 0;
+          console.log('⚡ No agent audio – showing UI action immediately (no drain needed)');
+        } else if (client.isAvatarMode()) {
+          // Avatar mode: audio is streamed via WebRTC – use server-computed remaining time
+          // plus a buffer for the WebRTC/avatar rendering pipeline latency.
+          if (estimatedRemainingPlaybackMs != null && estimatedRemainingPlaybackMs > 0) {
+            delayMs = estimatedRemainingPlaybackMs + AVATAR_PIPELINE_BUFFER_MS;
+            console.log(`⏳ Avatar mode: server says ${estimatedRemainingPlaybackMs}ms remaining + ${AVATAR_PIPELINE_BUFFER_MS}ms pipeline buffer = ${delayMs}ms`);
+          } else if (totalAudioDurationMs != null && totalAudioDurationMs > 0) {
+            // Fallback: use total audio duration (most audio already played, but be safe)
+            delayMs = Math.max(totalAudioDurationMs * 0.5, AVATAR_PIPELINE_BUFFER_MS);
+            console.log(`⏳ Avatar mode fallback: using ${delayMs.toFixed(0)}ms (50% of ${totalAudioDurationMs}ms total + buffer)`);
+          } else {
+            delayMs = AVATAR_FALLBACK_DRAIN_MS;
+            console.log(`⏳ Avatar mode: no timing data, using fallback ${delayMs}ms`);
+          }
         } else {
           // Non-avatar mode: we schedule PCM chunks to AudioContext.
           // Compute remaining playback time from the cursor.
           const remainingSec = Math.max(0, client.getPlaybackEndTime() - client.getAudioContextTime());
-          delayMs = remainingSec * 1000 + 200; // +200ms safety margin
-          console.log(`⏳ Non-avatar mode: waiting ${delayMs.toFixed(0)}ms for local audio drain`);
+          delayMs = remainingSec * 1000 + 500; // +500ms safety margin
+          // Also consider server-provided data as a floor
+          if (estimatedRemainingPlaybackMs != null && estimatedRemainingPlaybackMs > delayMs) {
+            delayMs = estimatedRemainingPlaybackMs + 300;
+            console.log(`⏳ Non-avatar mode: using server estimate ${delayMs.toFixed(0)}ms (higher than AudioContext calc)`);
+          } else {
+            console.log(`⏳ Non-avatar mode: waiting ${delayMs.toFixed(0)}ms for local audio drain`);
+          }
         }
         
         // Clear any existing timer (safety)
@@ -216,6 +245,11 @@ export function VoiceSessionApp() {
       // Used only for adding AI messages to the chat – NOT for UI gating.
       client.onAudioTranscriptDone((transcript) => {
         console.log('🎤 Audio transcript done:', transcript);
+        
+        // Mark that the agent actually spoke in this response
+        if (transcript && transcript.trim()) {
+          agentProducedAudioRef.current = true;
+        }
         
         // Add the AI transcript to the message list
         if (transcript && transcript.trim()) {
@@ -406,9 +440,13 @@ export function VoiceSessionApp() {
 
   // Handle Transfer Confirmation
   const handleTransferConfirm = useCallback(() => {
-    if (voiceClientRef.current && transferCallId) {
+    if (voiceClientRef.current && transferCallId && pendingTransfer) {
       voiceClientRef.current.sendFunctionResult(transferCallId, {
-        confirmed: true,
+        approved: true,
+        recipient: pendingTransfer.recipient,
+        iban: pendingTransfer.iban,
+        amount: pendingTransfer.amount,
+        currency: pendingTransfer.currency || 'EUR',
         message: 'Überweisung wurde bestätigt'
       });
       setPendingTransfer(null);
@@ -416,12 +454,12 @@ export function VoiceSessionApp() {
       setShowTransferModal(false);
       setIsLoadingTransfer(false);
     }
-  }, [transferCallId]);
+  }, [transferCallId, pendingTransfer]);
 
   const handleTransferReject = useCallback(() => {
     if (voiceClientRef.current && transferCallId) {
       voiceClientRef.current.sendFunctionResult(transferCallId, {
-        confirmed: false,
+        approved: false,
         message: 'Überweisung wurde abgebrochen'
       });
       setPendingTransfer(null);
