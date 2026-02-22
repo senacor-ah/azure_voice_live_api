@@ -56,6 +56,135 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
   const agentProducedAudioRef = useRef<boolean>(false);
   // Track text mode for use inside callbacks with stale closures
   const isTextModeRef = useRef<boolean>(false);
+
+  // ── AI Message Display Buffer ────────────────────────────────────────────
+  // In text mode multiple AI turns can arrive almost simultaneously.
+  // Each message is shown immediately, but the NEXT message is held back until
+  // a reading-time delay has elapsed so the user has time to read.
+  /** Queued assistant messages waiting to be displayed */
+  const aiMessageQueueRef = useRef<{ role: 'assistant'; content: string; timestamp: Date }[]>([]);
+  /** True while we are inside a reading-time delay between messages */
+  const isDisplayingRef = useRef(false);
+  /** Timer handle for the reading-time delay */
+  const displayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Accumulated streaming deltas that arrived while a reading delay is active */
+  const deltaBufferRef = useRef<string>('');
+  /** True while incoming deltas should be buffered instead of shown immediately */
+  const isDeltaBufferingRef = useRef(false);
+
+  /** How long (ms) the user should have to read `content` before the next message pops in. */
+  const getReadingDelayMs = (content: string) =>
+    Math.min(Math.max(content.length * 45, 1500), 5000);
+
+  /**
+   * UI action (appointment/transfer) that should fire once the message
+   * display queue has fully drained. Set this instead of calling
+   * setShowAppointmentModal/setShowTransferModal directly when the queue
+   * may still be draining (text mode).
+   */
+  const queuedUiActionRef = useRef<'appointment' | 'transfer' | null>(null);
+
+  /**
+   * Trigger a UI action (appointment/transfer).
+   * If the message display buffer is still draining, defer until it finishes.
+   * Ref pattern so voice-client callbacks never capture a stale closure.
+   */
+  const triggerUiActionRef = useRef<(action: 'appointment' | 'transfer') => void>(() => {});
+  triggerUiActionRef.current = (action: 'appointment' | 'transfer') => {
+    if (isDisplayingRef.current || aiMessageQueueRef.current.length > 0) {
+      // Text messages still draining – park the action; queue drain will fire it
+      console.log(`⏳ Message buffer draining – deferring ${action} UI until queue empty`);
+      queuedUiActionRef.current = action;
+    } else {
+      // Queue already empty – fire right away
+      if (action === 'appointment') {
+        console.log('📅 Queue empty – showing appointment modal NOW');
+        setShowAppointmentModal(true);
+        setIsLoadingAppointments(false);
+      } else {
+        console.log('💸 Queue empty – showing transfer modal NOW');
+        setShowTransferModal(true);
+        setIsLoadingTransfer(false);
+      }
+      pendingUiActionRef.current = null;
+    }
+  };
+
+  /**
+   * Process the next queued assistant message.
+   * Uses the ref pattern so it never captures a stale closure.
+   */
+  const showNextFromQueueRef = useRef<() => void>(() => {});
+  showNextFromQueueRef.current = () => {
+    if (aiMessageQueueRef.current.length === 0) {
+      isDisplayingRef.current = false;
+      // Flush any deltas that accumulated for the next turn
+      if (isDeltaBufferingRef.current) {
+        isDeltaBufferingRef.current = false;
+        const buffered = deltaBufferRef.current;
+        deltaBufferRef.current = '';
+        if (buffered) {
+          setMessages(prev => [
+            ...prev,
+            { id: 'ai-streaming', role: 'assistant' as const, content: buffered, timestamp: new Date() },
+          ]);
+        }
+      }
+      // Fire any UI action that was waiting for the queue to fully drain
+      const queuedAction = queuedUiActionRef.current;
+      if (queuedAction) {
+        queuedUiActionRef.current = null;
+        console.log(`📤 Message queue drained – firing deferred UI action: ${queuedAction}`);
+        if (queuedAction === 'appointment') {
+          setShowAppointmentModal(true);
+          setIsLoadingAppointments(false);
+        } else {
+          setShowTransferModal(true);
+          setIsLoadingTransfer(false);
+        }
+        pendingUiActionRef.current = null;
+      }
+      return;
+    }
+    isDisplayingRef.current = true;
+    const next = aiMessageQueueRef.current.shift()!;
+    const msg = { ...next, id: `ai-${Date.now()}` };
+    setMessages(prev => [...prev, msg]);
+    displayTimerRef.current = setTimeout(
+      () => showNextFromQueueRef.current(),
+      getReadingDelayMs(msg.content),
+    );
+  };
+
+  /**
+   * Enqueue an assistant message.
+   * The first message in an empty queue is shown immediately;
+   * subsequent messages wait behind a reading-time delay.
+   * Stored in a ref so voice-client callbacks never capture a stale version.
+   */
+  const enqueueAssistantMessageRef = useRef<(content: string) => void>(() => {});
+  enqueueAssistantMessageRef.current = (content: string) => {
+    // Remove any live streaming bubble first
+    setMessages(prev => prev.filter(m => m.id !== 'ai-streaming'));
+
+    if (!isDisplayingRef.current && aiMessageQueueRef.current.length === 0) {
+      // Queue is empty – display immediately and start reading timer
+      isDisplayingRef.current = true;
+      isDeltaBufferingRef.current = true; // hold back next-turn deltas
+      setMessages(prev => [
+        ...prev,
+        { id: `ai-${Date.now()}`, role: 'assistant' as const, content, timestamp: new Date() },
+      ]);
+      displayTimerRef.current = setTimeout(
+        () => showNextFromQueueRef.current(),
+        getReadingDelayMs(content),
+      );
+    } else {
+      // Another message is still being displayed – queue this one
+      isDeltaBufferingRef.current = true;
+      aiMessageQueueRef.current.push({ role: 'assistant', content, timestamp: new Date() });
+    }
+  };
   
   // Extra buffer (ms) added on top of estimated remaining playback time
   // to account for WebRTC pipeline latency and avatar rendering.
@@ -129,6 +258,12 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
           responseStartTimeRef.current = null;
         }
 
+        // While a reading-time delay is active, buffer delta text for the next turn
+        if (isDeltaBufferingRef.current) {
+          deltaBufferRef.current += delta;
+          return;
+        }
+
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last?.id === 'ai-streaming') {
@@ -147,16 +282,12 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
       // Text Mode: finalize the streaming bubble when response is complete
       client.onTextDone((fullText) => {
         console.log('📝 Text response done:', fullText);
-        setMessages((prev) => {
-          const filtered = prev.filter((m) => m.id !== 'ai-streaming');
-          if (fullText.trim()) {
-            return [
-              ...filtered,
-              { id: `ai-${Date.now()}`, role: 'assistant' as const, content: fullText, timestamp: new Date() },
-            ];
-          }
-          return filtered;
-        });
+        if (fullText.trim()) {
+          enqueueAssistantMessageRef.current(fullText);
+        } else {
+          // Empty response – just remove the streaming bubble
+          setMessages(prev => prev.filter(m => m.id !== 'ai-streaming'));
+        }
       });
       
       // Event Handler: User Transcript received
@@ -282,17 +413,8 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
             return;
           }
           
-          if (action === 'appointment') {
-            console.log('📅 Playback drained – showing appointment modal NOW');
-            setShowAppointmentModal(true);
-            setIsLoadingAppointments(false);
-          } else if (action === 'transfer') {
-            console.log('💸 Playback drained – showing transfer modal NOW');
-            setShowTransferModal(true);
-            setIsLoadingTransfer(false);
-          }
-          
-          pendingUiActionRef.current = null;
+          console.log(`🎬 Playback drained – triggering UI action: ${action}`);
+          triggerUiActionRef.current(action);
           uiActionTimerRef.current = null;
         }, delayMs);
       });
@@ -387,6 +509,7 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
             setIsLoadingTransfer(false);
           }
           pendingUiActionRef.current = null;
+          queuedUiActionRef.current = null;
           // Keep data/callId so the agent can re-trigger if needed
         }
       });
@@ -443,6 +566,16 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
     setIsTranscriptMode(false);
     setIsTextMode(false);
     isTextModeRef.current = false;
+    // Clear message display buffer
+    if (displayTimerRef.current) {
+      clearTimeout(displayTimerRef.current);
+      displayTimerRef.current = null;
+    }
+    aiMessageQueueRef.current = [];
+    isDisplayingRef.current = false;
+    deltaBufferRef.current = '';
+    isDeltaBufferingRef.current = false;
+    queuedUiActionRef.current = null;
     setIsConnecting(false);
     setHasVideoConnection(false);
     setConnectionTime(0);
