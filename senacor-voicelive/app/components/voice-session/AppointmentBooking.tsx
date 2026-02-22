@@ -32,7 +32,7 @@ export function AppointmentBooking({
   onSelect,
   onCancel,
 }: AppointmentBookingProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
 
   if (!isOpen || !appointments || appointments.length === 0) return null;
 
@@ -50,12 +50,13 @@ export function AppointmentBooking({
 
   const handleAppointmentClick = (appointment: Appointment) => {
     if (!appointment.verfuegbar) return;
-    setSelectedId(appointment.id);
-    // Small delay for visual feedback
-    setTimeout(() => {
-      onSelect(appointment);
-      setSelectedId(null);
-    }, 300);
+    setSelectedAppointment(appointment);
+  };
+
+  const handleConfirm = () => {
+    if (!selectedAppointment) return;
+    onSelect(selectedAppointment);
+    setSelectedAppointment(null);
   };
 
   return (
@@ -97,7 +98,7 @@ export function AppointmentBooking({
         {/* Scrollable Appointments List */}
         <div className="flex-1 overflow-y-auto space-y-3 pr-2 -mr-2">
           {appointments.map((appointment) => {
-            const isSelected = selectedId === appointment.id;
+            const isSelected = selectedAppointment?.id === appointment.id;
             
             return (
               <button
@@ -141,13 +142,25 @@ export function AppointmentBooking({
         </div>
 
         {/* Action Buttons */}
-        <div className="mt-6 pt-6" style={{borderTop: '1px solid #e2e8f0'}}>
+        <div className="mt-6 pt-6 flex gap-3" style={{borderTop: '1px solid #e2e8f0'}}>
           <button
             onClick={onCancel}
-            className="w-full px-4 py-3 rounded-xl font-medium transition-colors"
+            className="flex-1 px-4 py-3 rounded-xl font-medium transition-colors"
             style={{border: '1px solid #e2e8f0', background: '#f8faff'}}
           >
             Abbrechen
+          </button>
+          <button
+            onClick={handleConfirm}
+            disabled={!selectedAppointment}
+            className="flex-1 px-4 py-3 rounded-xl font-semibold transition-all"
+            style={{
+              background: selectedAppointment ? '#7da0d7' : '#e2e8f0',
+              color: selectedAppointment ? '#fff' : '#94a3b8',
+              cursor: selectedAppointment ? 'pointer' : 'not-allowed',
+            }}
+          >
+            Termin bestätigen
           </button>
         </div>
       </div>
