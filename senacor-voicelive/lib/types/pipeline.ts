@@ -3,7 +3,7 @@
  * Maps backend event types to visual pipeline steps.
  */
 
-export type StepStatus = 'idle' | 'running' | 'success' | 'error'
+export type StepStatus = 'idle' | 'running' | 'success' | 'error' | 'fading'
 
 export interface PipelineStep {
   id: string

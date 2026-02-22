@@ -26,6 +26,8 @@ export class AuthenticatedVoiceClient {
     
     // Event callbacks
     private _onTextReceived?: (text: string) => void;
+    private _onTextDelta?: (text: string) => void;
+    private _onTextDone?: (text: string) => void;
     private _onUserTranscript?: (text: string) => void;
     private _onApiResponse?: (endpoint: string, data: any) => void;
     private _onConnected?: () => void;
@@ -43,6 +45,10 @@ export class AuthenticatedVoiceClient {
     
     // Video/Avatar element
     private videoElement: HTMLVideoElement | null = null;
+
+    // Microphone stream / source node (stored so we can tear it down)
+    private micStream: MediaStream | null = null;
+    private micSource: MediaStreamAudioSourceNode | null = null;
     
     // Recording state
     private isRecording: boolean = true;
@@ -50,6 +56,8 @@ export class AuthenticatedVoiceClient {
     // WebRTC for Avatar
     private peerConnection: RTCPeerConnection | null = null;
     private avatarEnabled: boolean = false;
+    private lastAvatarConfig: any = null;
+    private isTextModeActive: boolean = false;
     
     // Audio playback queue (for non-avatar mode)
     private audioQueue: Float32Array[] = [];
@@ -123,10 +131,17 @@ export class AuthenticatedVoiceClient {
                     }
                 }
                 
-                // Handle text responses (AI speaking)
+                // Handle text responses (AI speaking, streaming deltas)
                 else if (message.type === 'text.delta') {
-                    console.log('AI:', message.text);
+                    console.log('AI text delta:', message.text);
                     this._onTextReceived?.(message.text);
+                    this._onTextDelta?.(message.text);
+                }
+                
+                // Handle text response done (full text response completed)
+                else if (message.type === 'response.text.done') {
+                    console.log('AI text done:', message.text);
+                    this._onTextDone?.(message.text || '');
                 }
                 
                 // Handle user transcript (user speaking)
@@ -145,8 +160,11 @@ export class AuthenticatedVoiceClient {
                     
                     console.log('Avatar enabled:', this.avatarEnabled);
                     
-                    // If avatar is enabled, start WebRTC connection
-                    if (this.avatarEnabled && session.avatar) {
+                    // If avatar is enabled and no peerConnection yet, start WebRTC.
+                    // This only happens once per session — the connection persists.
+                    // Subsequent session.updated events (e.g. modality changes) are
+                    // modality-only and don't need a new WebRTC connection.
+                    if (this.avatarEnabled && session.avatar && !this.peerConnection) {
                         console.log('Starting WebRTC for avatar...');
                         this._startWebRTC(session.avatar);
                     }
@@ -256,8 +274,9 @@ export class AuthenticatedVoiceClient {
             this.audioWorklet = new AudioWorkletNode(this.audioContext, 'audio-processor');
             
             // Microphone → Worklet → Backend
-            const source = this.audioContext.createMediaStreamSource(stream);
-            source.connect(this.audioWorklet);
+            this.micSource = this.audioContext.createMediaStreamSource(stream);
+            this.micStream = stream;
+            this.micSource.connect(this.audioWorklet);
             
             this.audioWorklet.port.onmessage = (event: MessageEvent) => {
                 // Send PCM16 Audio to backend
@@ -268,6 +287,51 @@ export class AuthenticatedVoiceClient {
             
         } catch (error) {
             console.error('Failed to setup audio:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Stop mic tracks and disconnect source – removes browser mic indicator.
+     * The AudioWorklet node itself stays alive so we can reconnect later.
+     */
+    private _teardownMic(): void {
+        this.isRecording = false;
+        if (this.micSource) {
+            this.micSource.disconnect();
+            this.micSource = null;
+        }
+        if (this.micStream) {
+            this.micStream.getTracks().forEach((t) => t.stop());
+            this.micStream = null;
+        }
+        console.log('🎤 Mic torn down (browser indicator cleared)');
+    }
+
+    /**
+     * Re-request mic access and reconnect to the existing AudioWorklet.
+     * Call this when leaving text mode to restore voice input.
+     */
+    async reconnectMic(): Promise<void> {
+        if (!this.audioContext || !this.audioWorklet) {
+            console.warn('reconnectMic: AudioContext/Worklet not ready');
+            return;
+        }
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    sampleRate: 24000,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                } as any,
+            });
+            this.micStream = stream;
+            this.micSource = this.audioContext.createMediaStreamSource(stream);
+            this.micSource.connect(this.audioWorklet);
+            console.log('🎤 Mic reconnected');
+        } catch (error) {
+            console.error('reconnectMic failed:', error);
             throw error;
         }
     }
@@ -419,6 +483,69 @@ export class AuthenticatedVoiceClient {
     }
 
     /**
+     * Switch between text-only and voice+audio mode on the active session.
+     * When entering text mode:
+     *   - Tells Azure to only produce text responses (no audio/TTS)
+     *   - Mutes the WebRTC video element so existing queued audio is silenced
+     * When leaving text mode:
+     *   - Restores audio modality
+     *   - Unmutes the WebRTC video element
+     */
+    setTextMode(enabled: boolean): void {
+        if (!this.isAuthenticated || !this.ws) {
+            console.warn('setTextMode called but not connected');
+            return;
+        }
+
+        const modalities = enabled ? ['text'] : ['text', 'audio'];
+        console.log(`💬 Text mode ${enabled ? 'ON' : 'OFF'} – updating session modalities:`, modalities);
+
+        this.ws.send(JSON.stringify({
+            type: 'session.update',
+            session: { modalities }
+        }));
+
+        if (enabled) {
+            this.isTextModeActive = true;
+            // Hide/mute the avatar video — do NOT close the peerConnection!
+            // The Voice Live API has no session.avatar.disconnect event;
+            // the WebRTC connection persists for the entire session lifetime.
+            this._muteAvatar();
+            // Stop mic tracks → removes browser mic indicator
+            this._teardownMic();
+        } else {
+            this.isTextModeActive = false;
+            // Restore the avatar video
+            this._unmuteAvatar();
+        }
+        // Reconnecting mic is async – callers are responsible via reconnectMic()
+    }
+
+    /**
+     * Mute/hide the avatar video element without tearing down the WebRTC connection.
+     * The Voice Live API has no session.avatar.disconnect event, so the
+     * peerConnection must stay alive for the entire session.
+     */
+    private _muteAvatar(): void {
+        if (this.videoElement) {
+            this.videoElement.muted = true;
+            this.videoElement.pause();
+        }
+        console.log('📹 Avatar muted/paused (WebRTC still connected)');
+    }
+
+    /**
+     * Restore the avatar video element after leaving text mode.
+     */
+    private _unmuteAvatar(): void {
+        if (this.videoElement) {
+            this.videoElement.muted = false;
+            this.videoElement.play().catch(() => {});
+        }
+        console.log('📹 Avatar unmuted/resumed');
+    }
+
+    /**
      * Send text message
      */
     sendText(text: string): void {
@@ -433,6 +560,35 @@ export class AuthenticatedVoiceClient {
                 type: 'message',
                 role: 'user',
                 content: [{ type: 'text', text: text }]
+            }
+        }));
+    }
+
+    /**
+     * Send text message and immediately request a text-only response.
+     * Use this in text-chat mode instead of sendText().
+     */
+    sendTextAndRespond(text: string): void {
+        if (!this.isAuthenticated) {
+            console.error('Not authenticated');
+            return;
+        }
+
+        // 1. Add user message to conversation
+        this.ws!.send(JSON.stringify({
+            type: 'conversation.item.create',
+            item: {
+                type: 'message',
+                role: 'user',
+                content: [{ type: 'input_text', text: text }]
+            }
+        }));
+
+        // 2. Request a text-only response (no audio output)
+        this.ws!.send(JSON.stringify({
+            type: 'response.create',
+            response: {
+                modalities: ['text']
             }
         }));
     }
@@ -460,6 +616,9 @@ export class AuthenticatedVoiceClient {
             this.peerConnection.close();
             this.peerConnection = null;
         }
+
+        // Stop mic tracks and disconnect source
+        this._teardownMic();
         
         if (this.audioWorklet) {
             this.audioWorklet.disconnect();
@@ -474,6 +633,8 @@ export class AuthenticatedVoiceClient {
         this.isAuthenticated = false;
         this.sessionId = null;
         this.avatarEnabled = false;
+        this.lastAvatarConfig = null;
+        this.isTextModeActive = false;
     }
 
     /**
@@ -482,6 +643,7 @@ export class AuthenticatedVoiceClient {
     private async _startWebRTC(avatarConfig: any): Promise<void> {
         try {
             console.log('Avatar config received:', JSON.stringify(avatarConfig, null, 2));
+            this.lastAvatarConfig = avatarConfig;
             
             // Build ICE servers from avatar config
             // Azure returns ice_servers as array of {urls: string[], username?: string, credential?: string}
@@ -740,6 +902,16 @@ export class AuthenticatedVoiceClient {
     /** Called when AI text is received */
     onTextReceived(callback: (text: string) => void): void {
         this._onTextReceived = callback;
+    }
+
+    /** Called for each streaming text delta from the AI */
+    onTextDelta(callback: (text: string) => void): void {
+        this._onTextDelta = callback;
+    }
+
+    /** Called when the full AI text response is complete */
+    onTextDone(callback: (text: string) => void): void {
+        this._onTextDone = callback;
     }
 
     /** Called when user transcript is received */

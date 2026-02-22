@@ -6,6 +6,7 @@ import { SessionStats } from "./SessionStats";
 import { SessionControls } from "./SessionControls";
 import { AvatarDisplay } from "./AvatarDisplay";
 import { TranscriptView, Message } from "./TranscriptView";
+import { TextInputBar } from "./TextInputBar";
 import { AudioVisualizer } from "./AudioVisualizer";
 import { BottomNavigation, NavItem } from "./BottomNavigation";
 import { AccountsView } from "./AccountsView";
@@ -21,6 +22,7 @@ export function VoiceSessionApp() {
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const [isMicActive, setIsMicActive] = useState(false);
   const [isTranscriptMode, setIsTranscriptMode] = useState(false);
+  const [isTextMode, setIsTextMode] = useState(false);
   const [activeNav, setActiveNav] = useState<NavItem>("home");
   const [connectionTime, setConnectionTime] = useState(0);
   const [sessionInfo, setSessionInfo] = useState<{sessionId: string; userName?: string} | null>(null);
@@ -48,6 +50,8 @@ export function VoiceSessionApp() {
   const pendingUiActionRef = useRef<'appointment' | 'transfer' | null>(null);
   // Track whether the agent actually produced audio in the current response
   const agentProducedAudioRef = useRef<boolean>(false);
+  // Track text mode for use inside callbacks with stale closures
+  const isTextModeRef = useRef<boolean>(false);
   
   // Extra buffer (ms) added on top of estimated remaining playback time
   // to account for WebRTC pipeline latency and avatar rendering.
@@ -105,6 +109,47 @@ export function VoiceSessionApp() {
         // In audio mode, text.delta is not typically sent
         // This is only for text-only sessions
         console.log('📝 Text delta received (text-only mode):', text);
+      });
+
+      // Text Mode: stream incoming AI text into a live message bubble
+      client.onTextDelta((delta) => {
+        // Mark response received on first delta (text mode equivalent of onAudioPlaybackStarted)
+        if (responseStartTimeRef.current) {
+          const responseTime = Date.now() - responseStartTimeRef.current;
+          console.log(`⚡ First text delta received. Response time: ${responseTime}ms`);
+          setResponseTimings(prev => [...prev, responseTime]);
+          setIsWaitingForResponse(false);
+          responseStartTimeRef.current = null;
+        }
+
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.id === 'ai-streaming') {
+            return [
+              ...prev.slice(0, -1),
+              { ...last, content: last.content + delta },
+            ];
+          }
+          return [
+            ...prev,
+            { id: 'ai-streaming', role: 'assistant' as const, content: delta, timestamp: new Date() },
+          ];
+        });
+      });
+
+      // Text Mode: finalize the streaming bubble when response is complete
+      client.onTextDone((fullText) => {
+        console.log('📝 Text response done:', fullText);
+        setMessages((prev) => {
+          const filtered = prev.filter((m) => m.id !== 'ai-streaming');
+          if (fullText.trim()) {
+            return [
+              ...filtered,
+              { id: `ai-${Date.now()}`, role: 'assistant' as const, content: fullText, timestamp: new Date() },
+            ];
+          }
+          return filtered;
+        });
       });
       
       // Event Handler: User Transcript received
@@ -181,7 +226,11 @@ export function VoiceSessionApp() {
         // All audio has been GENERATED. Now wait for playback to finish.
         let delayMs = 0;
         
-        if (!agentProducedAudioRef.current) {
+        if (isTextModeRef.current) {
+          // Text mode: no audio playback at all – show UI immediately
+          delayMs = 0;
+          console.log('⚡ Text mode – showing UI action immediately (no audio drain needed)');
+        } else if (!agentProducedAudioRef.current) {
           // Agent produced no audio (pure function-call response) – show UI immediately
           delayMs = 0;
           console.log('⚡ No agent audio – showing UI action immediately (no drain needed)');
@@ -385,6 +434,8 @@ export function VoiceSessionApp() {
     setIsLoadingAppointments(false);
     setIsMicActive(false);
     setIsTranscriptMode(false);
+    setIsTextMode(false);
+    isTextModeRef.current = false;
     setIsConnecting(false);
     setHasVideoConnection(false);
     setConnectionTime(0);
@@ -437,6 +488,49 @@ export function VoiceSessionApp() {
   const handleTranscriptToggle = useCallback(() => {
     setIsTranscriptMode(prev => !prev);
   }, []);
+
+  const handleTextModeToggle = useCallback(() => {
+    const client = voiceClientRef.current;
+    if (!client || status !== 'connected') return;
+
+    // Read current state and flip — side effects run OUTSIDE the updater
+    // to avoid React StrictMode double-invocation in dev mode.
+    setIsTextMode((prev) => {
+      const entering = !prev;
+      isTextModeRef.current = entering;
+
+      // Schedule side effects for after state commit (microtask)
+      queueMicrotask(() => {
+        client.setTextMode(entering);
+        if (entering) {
+          setIsMicActive(false);
+          setHasVideoConnection(false);
+        } else {
+          setHasVideoConnection(true);
+          client.reconnectMic().catch((err) => console.error('Failed to reconnect mic:', err));
+        }
+      });
+
+      return entering;
+    });
+  }, [status]);
+
+  const handleSendText = useCallback((text: string) => {
+    const client = voiceClientRef.current;
+    if (!client || status !== 'connected') return;
+
+    // Optimistic: show user message immediately
+    setMessages((prev) => [
+      ...prev,
+      { id: Date.now().toString(), role: 'user' as const, content: text, timestamp: new Date() },
+    ]);
+
+    // Start response timer so stats update
+    responseStartTimeRef.current = Date.now();
+    setIsWaitingForResponse(true);
+
+    client.sendTextAndRespond(text);
+  }, [status]);
 
   // Handle Transfer Confirmation
   const handleTransferConfirm = useCallback(() => {
@@ -523,14 +617,16 @@ export function VoiceSessionApp() {
               
               {/* Top Part: Main Content Area */}
               <div className="relative flex-1 min-h-0 w-full">
-                {/* Avatar Container - Animates between full size and PiP */}
+                {/* Avatar Container - hidden (opacity-0) in text mode to keep WebRTC alive */}
                 <div 
                   className={cn(
                     "overflow-hidden",
                     "transition-all duration-700",
-                    isTranscriptMode 
-                      ? "absolute bottom-4 right-4 w-28 h-36 rounded-2xl shadow-2xl ring-2 ring-primary/30 z-30 ease-out" 
-                      : "absolute bottom-0 right-0 w-full h-full rounded-none shadow-none ease-in-out"
+                    isTextMode
+                      ? "absolute bottom-0 right-0 w-full h-full rounded-none opacity-0 pointer-events-none"
+                      : isTranscriptMode 
+                        ? "absolute bottom-4 right-4 w-28 h-36 rounded-2xl shadow-2xl ring-2 ring-primary/30 z-30 ease-out" 
+                        : "absolute bottom-0 right-0 w-full h-full rounded-none shadow-none ease-in-out"
                   )}
                   style={{
                     transitionProperty: 'all',
@@ -540,38 +636,51 @@ export function VoiceSessionApp() {
                   }}
                 >
                   <AvatarDisplay 
-                    isPip={isTranscriptMode} 
+                    isPip={isTranscriptMode && !isTextMode} 
                     isConnected={isConnected} 
                     hasVideo={hasVideoConnection}
                     videoRef={videoRef}
-                    className={cn(
-                      isTranscriptMode ? "" : ""
-                    )}
                   />
                 </div>
 
-                {/* Transcript View - Only visible in transcript mode */}
+                {/* Transcript View - visible in transcript mode OR text mode */}
                 <div 
                   className={cn(
                     "absolute inset-0 w-full h-full p-4 overflow-y-auto transition-opacity duration-300",
-                    isTranscriptMode ? "opacity-100 z-10" : "opacity-0 pointer-events-none z-0"
+                    (isTranscriptMode || isTextMode) ? "opacity-100 z-10" : "opacity-0 pointer-events-none z-0"
                   )}
                   style={{background: '#f8faff'}}
                 >
-                  <TranscriptView messages={messages} isSessionActive={isConnected} />
+                  <TranscriptView
+                    messages={messages}
+                    isSessionActive={isConnected}
+                    isLoading={isTextMode && isWaitingForResponse && !messages.some(m => m.id === 'ai-streaming')}
+                    appointmentBadges={
+                      isTextMode && showAppointmentModal && appointmentData
+                        ? {
+                            appointments: appointmentData.appointments || [],
+                            advisor: appointmentData.advisor || { name: 'Michael Weber', title: 'Senior Bankberater', avatarUrl: '/advisor-avatar.svg' },
+                            onSelect: handleAppointmentSelect,
+                            onCancel: handleAppointmentCancel,
+                          }
+                        : null
+                    }
+                  />
                 </div>
                 
-                {/* Floating Controls Overlay - Bottom Right (only in Avatar mode) */}
-                {!isTranscriptMode && (
+                {/* Floating Controls Overlay - Bottom Right (only in pure Avatar mode) */}
+                {!isTranscriptMode && !isTextMode && (
                   <div className="absolute bottom-4 right-4 z-20">
                     <SessionControls
                       isMicActive={isMicActive}
                       isTranscriptMode={isTranscriptMode}
+                      isTextMode={isTextMode}
                       isConnected={isConnected}
                       onMicToggle={handleMicToggle}
                       onConnect={handleConnect}
                       onDisconnect={handleDisconnect}
                       onTranscriptToggle={handleTranscriptToggle}
+                      onTextModeToggle={handleTextModeToggle}
                       variant="compact"
                       className="shadow-lg"
                     />
@@ -579,31 +688,35 @@ export function VoiceSessionApp() {
                 )}
               </div>
               
-              {/* Bottom Part: Session Stats - Integrated */}
+              {/* Bottom Part: Controls */}
               <div className="flex-shrink-0 z-10 relative" style={{borderTop: '1px solid #e2e8f0', background: '#fff'}}>
-                <SessionStats
-                  messageCount={messages.length}
-                  connectionTime={connectionTime}
-                  responseTime={avgResponseTime}
-                  isConnected={isConnected}
-                  compact={isTranscriptMode}
-                  className="bg-transparent border-none shadow-none rounded-none h-auto p-4"
-                />
                 
-                {/* Controls in Transcript Mode - Below Stats */}
-                {isTranscriptMode && (
-                  <div className="flex justify-center pb-2">
-                    <SessionControls
-                      isMicActive={isMicActive}
-                      isTranscriptMode={isTranscriptMode}
-                      isConnected={isConnected}
-                      onMicToggle={handleMicToggle}
-                      onConnect={handleConnect}
-                      onDisconnect={handleDisconnect}
-                      onTranscriptToggle={handleTranscriptToggle}
-                      variant="compact"
-                      className="shadow-md"
-                    />
+                {/* Controls in Transcript or Text Mode */}
+                {(isTranscriptMode || isTextMode) && (
+                  <div className="flex flex-col gap-2 pb-2">
+                    {/* Text input bar – only in text mode */}
+                    {isTextMode && (
+                      <TextInputBar
+                        onSendText={handleSendText}
+                        disabled={!isConnected}
+                        className="mx-3"
+                      />
+                    )}
+                    <div className="flex justify-center">
+                      <SessionControls
+                        isMicActive={isMicActive}
+                        isTranscriptMode={isTranscriptMode}
+                        isTextMode={isTextMode}
+                        isConnected={isConnected}
+                        onMicToggle={handleMicToggle}
+                        onConnect={handleConnect}
+                        onDisconnect={handleDisconnect}
+                        onTranscriptToggle={handleTranscriptToggle}
+                        onTextModeToggle={handleTextModeToggle}
+                        variant="compact"
+                        className="shadow-md"
+                      />
+                    </div>
                   </div>
                 )}
               </div>
@@ -623,8 +736,8 @@ export function VoiceSessionApp() {
         />
       )}
 
-      {/* Appointment Booking Modal */}
-      {appointmentData && showAppointmentModal && (
+      {/* Appointment Booking Modal – only shown outside text mode */}
+      {appointmentData && showAppointmentModal && !isTextMode && (
         <AppointmentBooking
           appointments={appointmentData.appointments || []}
           advisor={appointmentData.advisor || { name: "Michael Weber", title: "Senior Bankberater", avatarUrl: "/advisor-avatar.svg" }}
@@ -644,8 +757,8 @@ export function VoiceSessionApp() {
         </div>
       )}
 
-      {/* Loading Overlay for Appointments */}
-      {isLoadingAppointments && (
+      {/* Loading Overlay for Appointments – only shown outside text mode */}
+      {isLoadingAppointments && !isTextMode && (
         <div className="fixed inset-0 backdrop-blur-sm z-50 flex items-center justify-center" style={{background: 'rgba(0,0,0,0.35)'}}>
           <div className="rounded-2xl p-8 flex flex-col items-center gap-4" style={{background: '#fff', boxShadow: '0 8px 32px rgba(0,0,0,0.15)'}}>
             <div className="w-12 h-12 border-4 border-t-transparent rounded-full animate-spin" style={{borderColor: '#7da0d7', borderTopColor: 'transparent'}} />

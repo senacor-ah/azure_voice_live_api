@@ -351,6 +351,8 @@ export class VoiceProxyHandler {
         inputAudioTranscription: {
           model: 'whisper-1',
         } as AudioInputTranscriptionOptions,
+        inputAudioNoiseReduction: { type: 'azure_deep_noise_suppression' },
+        inputAudioEchoCancellation: { type: 'server_echo_cancellation' },
         avatar: avatarConfig,
         toolChoice: 'auto',
       } as RequestSession
@@ -381,6 +383,8 @@ export class VoiceProxyHandler {
       inputAudioTranscription: {
         model: 'whisper-1',
       } as AudioInputTranscriptionOptions,
+      inputAudioNoiseReduction: { type: 'azure_deep_noise_suppression' },
+      inputAudioEchoCancellation: { type: 'server_echo_cancellation' },
       avatar: avatarConfig,
     } as RequestSession
   }
@@ -735,8 +739,11 @@ WICHTIGE REGELN:
 
       // --- Server Error ---
       onServerError: async (event: ServerEventError) => {
-        const errorMessage = (event as unknown as Record<string, unknown>).message ?? String(event)
-        const errorCode = (event as unknown as Record<string, unknown>).code ?? 'unknown'
+        const raw = event as unknown as Record<string, unknown>
+        const errorMessage = typeof raw.message === 'string'
+          ? raw.message
+          : (raw.message != null ? JSON.stringify(raw.message) : JSON.stringify(raw))
+        const errorCode = raw.code ?? 'unknown'
         console.error(`❌ Azure error: ${errorMessage} (code: ${errorCode})`)
         this.sendMessage(clientWs, { type: 'error', error: { message: errorMessage, code: errorCode } })
       },
@@ -778,7 +785,7 @@ WICHTIGE REGELN:
               type: 'function_call',
               name: 'termine_anzeigen',
               arguments: JSON.stringify(functionArguments),
-              call_id: `sm-termine-anzeigen-${Date.now()}`,
+              call_id: `sm-termin-${Date.now()}`,
             })
           }
         }
@@ -1313,6 +1320,74 @@ WICHTIGE REGELN:
       const userId = session.userContext?.user_id ?? 'Unknown'
 
       console.log(`Function call result from user ${userName}: call_id=${callId}`)
+
+      // ================================================================
+      // Synthetic sm-termin-* call_ids: these were generated server-side
+      // for the termine_anzeigen UI and do NOT exist in Azure's conversation.
+      // We intercept them here, run the workflow validation, and inject a
+      // user message into Azure's conversation to continue normally.
+      // ================================================================
+      if (callId.startsWith('sm-termin-')) {
+        console.log('📅 Intercepting synthetic termin selection (sm-termin-*)')
+
+        // Run workflow validation
+        if (result?.selected && session.workflowContext && session.workflowActive) {
+          const terminId = result.termin_id as string
+          const datum = result.datum as string
+          const uhrzeit = result.uhrzeit as string
+
+          const workflow = createAppointmentWorkflow()
+          const selectionData = { termin_id: terminId, datum, uhrzeit, selected: true }
+          const updatedContext = workflow.processSelection(
+            session.workflowContext as unknown as ReturnType<typeof workflow.startWorkflow>,
+            selectionData,
+          )
+          session.workflowContext = updatedContext as unknown as WorkflowContext
+
+          if (updatedContext.state === WorkflowState.COMPLETED) {
+            // Inject a user message to tell the agent what was selected
+            const confirmMessage = `Ich habe den Termin am ${datum} um ${uhrzeit} Uhr ausgewählt und bestätigt.`
+            await azureSession.addConversationItem({
+              type: 'message',
+              role: 'user',
+              content: [{ type: 'input_text', text: confirmMessage }],
+            } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
+            await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+
+            session.workflowActive = false
+            session.appointmentFlowState = AppointmentFlowState.CONFIRMED
+            console.log(`✅ Appointment confirmed via synthetic call: ${datum} ${uhrzeit}`)
+          } else if (updatedContext.state === WorkflowState.FAILED) {
+            const errorMessage = `Die Terminbuchung ist leider fehlgeschlagen: ${updatedContext.error ?? 'Unbekannter Fehler'}`
+            await azureSession.addConversationItem({
+              type: 'message',
+              role: 'user',
+              content: [{ type: 'input_text', text: errorMessage }],
+            } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
+            await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+
+            session.workflowActive = false
+            console.log('❌ Appointment workflow failed')
+          } else {
+            console.log(`⚠️ Appointment workflow state: ${updatedContext.state}`)
+          }
+        } else if (!result?.selected) {
+          // User cancelled
+          const cancelMessage = 'Ich möchte doch keinen Termin buchen.'
+          await azureSession.addConversationItem({
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: cancelMessage }],
+          } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
+          await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+
+          session.workflowActive = false
+          session.appointmentFlowState = AppointmentFlowState.IDLE
+          console.log('❌ Appointment selection cancelled by user')
+        }
+
+        return // Do NOT forward to Azure — call_id doesn't exist there
+      }
 
       // Check for money transfer confirmation
       if (result?.approved && result?.recipient) {

@@ -44,6 +44,13 @@ interface UsePubSubReturn {
   setSelectedEvent: (e: PipelineEvent | null) => void
 }
 
+/** How long after audio transcript done before fading starts (avatar speaks) */
+const FADE_AFTER_AUDIO_MS = 5000
+/** How long after response done in text mode before fading starts */
+const FADE_AFTER_TEXT_MS = 1500
+/** Duration of fading CSS transition before resetting to idle */
+const FADE_TRANSITION_MS = 1200
+
 export function usePubSub(url: string | null, options?: UsePubSubOptions): UsePubSubReturn {
   const { autoConnect = false } = options ?? {}
 
@@ -54,6 +61,11 @@ export function usePubSub(url: string | null, options?: UsePubSubOptions): UsePu
   const [selectedEvent, setSelectedEvent] = useState<PipelineEvent | null>(null)
   const [connectedClients, setConnectedClients] = useState<Record<string, ConnectedClient>>({})
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null)
+
+  // Fade state: set when a response cycle ends – triggers the fade useEffect
+  const [lastEndEvent, setLastEndEvent] = useState<{ mode: 'text' | 'audio'; stamp: number } | null>(null)
+  // Track whether audio transcript fired in the current response cycle
+  const hadAudioInCycleRef = useRef(false)
 
   const wsRef = useRef<WebSocket | null>(null)
 
@@ -89,6 +101,22 @@ export function usePubSub(url: string | null, options?: UsePubSubOptions): UsePu
         setSelectedClientId((prev) => (prev === clientId ? null : prev))
       }
     }
+
+    // ── Fade / mode detection ─────────────────────────────────────────────
+    // New user turn → reset audio flag and cancel any pending fade
+    if (evt.type === 'input_audio_buffer.speech_started') {
+      hadAudioInCycleRef.current = false
+    }
+    // Avatar/audio mode: transcript done means audio was generated
+    if (evt.type === 'response.audio_transcript.done') {
+      hadAudioInCycleRef.current = true
+      setLastEndEvent({ mode: 'audio', stamp: Date.now() })
+    }
+    // Text mode: response done with no prior audio transcript → text cycle
+    if (evt.type === 'response.done' && !hadAudioInCycleRef.current) {
+      setLastEndEvent({ mode: 'text', stamp: Date.now() })
+    }
+    // ──────────────────────────────────────────────────────────────────────
 
     setEvents((prev) => [enrichedEvt, ...prev].slice(0, 500))
     setStats((prev) => ({
@@ -232,7 +260,50 @@ export function usePubSub(url: string | null, options?: UsePubSubOptions): UsePu
     setSelectedEvent(null)
     setConnectedClients({})
     setSelectedClientId(null)
+    setLastEndEvent(null)
+    hadAudioInCycleRef.current = false
   }, [])
+
+  // ── Fade effect ──────────────────────────────────────────────────────────
+  // Runs whenever a response cycle ends.
+  // 1. After the mode-specific delay: set active nodes to 'fading'
+  // 2. After the CSS transition: reset to 'idle'
+  useEffect(() => {
+    if (!lastEndEvent) return
+    const delay = lastEndEvent.mode === 'audio' ? FADE_AFTER_AUDIO_MS : FADE_AFTER_TEXT_MS
+
+    let idleTimer: ReturnType<typeof setTimeout> | null = null
+
+    const fadeTimer = setTimeout(() => {
+      setStepStates((prev) => {
+        const next = { ...prev }
+        for (const key of Object.keys(next)) {
+          if (next[key].status === 'success' || next[key].status === 'running') {
+            next[key] = { ...next[key], status: 'fading' }
+          }
+        }
+        return next
+      })
+      idleTimer = setTimeout(() => {
+        setStepStates((prev) => {
+          const next = { ...prev }
+          for (const key of Object.keys(next)) {
+            if (next[key].status === 'fading') {
+              next[key] = { ...next[key], status: 'idle' }
+            }
+          }
+          return next
+        })
+        idleTimer = null
+      }, FADE_TRANSITION_MS)
+    }, delay)
+
+    return () => {
+      clearTimeout(fadeTimer)
+      if (idleTimer) clearTimeout(idleTimer)
+    }
+  }, [lastEndEvent])
+  // ────────────────────────────────────────────────────────────────────────
 
   // Auto-connect
   useEffect(() => {

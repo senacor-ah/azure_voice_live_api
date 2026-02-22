@@ -83,7 +83,7 @@ type StepData = {
   icon: string
   color: string
   color2: string
-  status: 'idle' | 'running' | 'success' | 'error'
+  status: 'idle' | 'running' | 'success' | 'error' | 'fading'
   isSelected: boolean
   width?: number
 }
@@ -91,10 +91,16 @@ type StepData = {
 function StepNode({ data }: NodeProps<Node<StepData>>) {
   const { label, sublabel, icon, color, color2, status, isSelected, width } = data
   const Icon = ICONS[icon] ?? Radio
-  const active = status !== 'idle'
+  const active = status === 'running' || status === 'success'
+  const fading = status === 'fading'
 
   return (
-    <div className="flex flex-col items-center select-none group" style={width ? { width } : undefined}>
+    <div
+      className={`flex flex-col items-center select-none group transition-opacity ${
+        fading ? 'duration-[1200ms]' : 'duration-300'
+      }`}
+      style={{ ...(width ? { width } : {}), opacity: fading ? 0.35 : 1 }}
+    >
       {/* 8 invisible handles */}
       <Handle type="target"  position={Position.Left}   id="tgt-left"   className="!opacity-0 !w-1 !h-1" />
       <Handle type="target"  position={Position.Right}  id="tgt-right"  className="!opacity-0 !w-1 !h-1" />
@@ -122,7 +128,7 @@ function StepNode({ data }: NodeProps<Node<StepData>>) {
           border: `1px solid ${active ? color + '30' : 'rgba(0,0,0,0.06)'}`,
         }}
       >
-        {/* status pill */}
+        {/* status pill – hidden while fading out */}
         {status === 'running' && (
           <div className="absolute -top-2.5 left-1/2 -translate-x-1/2">
             <span className="flex items-center gap-1 text-[9px] font-semibold text-white px-2.5 py-0.5 rounded-full shadow-sm animate-pulse"
@@ -143,6 +149,13 @@ function StepNode({ data }: NodeProps<Node<StepData>>) {
           <div className="absolute -top-2.5 left-1/2 -translate-x-1/2">
             <span className="text-[9px] font-semibold text-red-600 bg-red-50 border border-red-200 px-2.5 py-0.5 rounded-full shadow-sm">
               Fehler
+            </span>
+          </div>
+        )}
+        {status === 'fading' && (
+          <div className="absolute -top-2.5 left-1/2 -translate-x-1/2">
+            <span className="text-[9px] font-semibold text-gray-400 bg-gray-50 border border-gray-200 px-2.5 py-0.5 rounded-full shadow-sm">
+              ✓ Fertig
             </span>
           </div>
         )}
@@ -260,7 +273,7 @@ function buildGraph(
     x: number; y: number; width?: number
   }> = [
     { id: 'speech',         label: 'Speech Input',       sublabel: 'Spracheingabe',       icon: 'mic',            color: '#334155', color2: '#1e293b', x: 20,  y: 225, width: 150 },
-    { id: 'speech_out',     label: 'Speech Response',    sublabel: 'Sprachausgabe',       icon: 'speaker',        color: '#059669', color2: '#10b981', x: 20,  y: 430, width: 150 },
+    { id: 'response',       label: 'Speech Response',    sublabel: 'Sprachausgabe',       icon: 'speaker',        color: '#059669', color2: '#10b981', x: 20,  y: 430, width: 150 },
     { id: 'handler',        label: 'Handler',            sublabel: 'Request Handler',     icon: 'cog',            color: '#475569', color2: '#334155', x: 280, y: 225 },
     { id: 'voicelive',      label: 'VoiceLive API',      sublabel: 'Azure Realtime',      icon: 'voicelive',      color: '#7c3aed', color2: '#6d28d9', x: 440, y: 225 },
     { id: 'transcription',  label: 'Transcription',      sublabel: 'Speech-to-Text',      icon: 'transcript',     color: '#d97706', color2: '#f59e0b', x: 600, y: 225 },
@@ -349,7 +362,7 @@ function buildGraph(
     // Completion: agent → voicelive
     ret('e10', 'agent',     'src-bottom', 'voicelive',  'tgt-bottom', '#2563eb', on('agent'), 'Completion'),
     // VoiceLive → Speech Response (WebRTC)
-    ret('e11', 'voicelive', 'src-left', 'speech_out', 'tgt-right', '#059669', on('voicelive'), 'WebRTC'),
+    ret('e11', 'voicelive', 'src-left', 'response', 'tgt-right', '#059669', on('voicelive'), 'WebRTC'),
   ]
 
   return { nodes, edges }

@@ -1,16 +1,18 @@
 'use client';
 
-import { Mic, MicOff, PhoneOff, Phone, MessageSquare, Video } from "lucide-react";
+import { Mic, MicOff, PhoneOff, Phone, MessageSquare, Video, Keyboard } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface SessionControlsProps {
   isMicActive: boolean;
   isTranscriptMode: boolean;
+  isTextMode: boolean;
   isConnected: boolean;
   onMicToggle: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
   onTranscriptToggle: () => void;
+  onTextModeToggle: () => void;
   variant?: "default" | "compact";
   className?: string;
 }
@@ -18,11 +20,13 @@ interface SessionControlsProps {
 export function SessionControls({
   isMicActive,
   isTranscriptMode,
+  isTextMode,
   isConnected,
   onMicToggle,
   onConnect,
   onDisconnect,
   onTranscriptToggle,
+  onTextModeToggle,
   variant = "default",
   className,
 }: SessionControlsProps) {
@@ -39,41 +43,62 @@ export function SessionControls({
       )}
       style={{background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(12px)', border: '1px solid #e2e8f0'}}
     >
-      {/* Toggle View Button */}
-      <button
-        onClick={onTranscriptToggle}
-        disabled={!isConnected}
-        className={cn(
-          "control-btn-secondary rounded-full flex items-center justify-center",
-          !isConnected && "opacity-50 cursor-not-allowed",
-          btnSize
-        )}
-      >
-        {isTranscriptMode ? (
-          <Video className={iconSize} />
-        ) : (
-          <MessageSquare className={iconSize} />
-        )}
-      </button>
+      {/* Toggle View Button (Avatar ↔ Transcript) – hidden in text mode */}
+      {!isTextMode && (
+        <button
+          onClick={onTranscriptToggle}
+          disabled={!isConnected}
+          className={cn(
+            "control-btn-secondary rounded-full flex items-center justify-center",
+            !isConnected && "opacity-50 cursor-not-allowed",
+            btnSize
+          )}
+          title={isTranscriptMode ? "Avatar anzeigen" : "Transkript anzeigen"}
+        >
+          {isTranscriptMode ? (
+            <Video className={iconSize} />
+          ) : (
+            <MessageSquare className={iconSize} />
+          )}
+        </button>
+      )}
 
-      {/* Microphone Button */}
+      {/* Text Mode Toggle Button */}
       <button
-        onClick={onMicToggle}
+        onClick={onTextModeToggle}
         disabled={!isConnected}
         className={cn(
-          isMicActive ? "control-btn-primary rounded-full" : "control-btn-secondary rounded-full",
+          isTextMode ? "control-btn-primary rounded-full" : "control-btn-secondary rounded-full",
           "flex items-center justify-center",
           !isConnected && "opacity-50 cursor-not-allowed",
           btnSize
         )}
-        aria-label={isMicActive ? "Mikrofon stoppen" : "Mikrofon starten"}
+        title={isTextMode ? "Zurück zur Sprachsteuerung" : "Textmodus aktivieren"}
+        aria-label={isTextMode ? "Sprachmodus" : "Textmodus"}
       >
-        {isMicActive ? (
-          <Mic className={iconSize} />
-        ) : (
-          <MicOff className={iconSize} />
-        )}
+        <Keyboard className={iconSize} />
       </button>
+
+      {/* Microphone Button – hidden in text mode */}
+      {!isTextMode && (
+        <button
+          onClick={onMicToggle}
+          disabled={!isConnected}
+          className={cn(
+            isMicActive ? "control-btn-primary rounded-full" : "control-btn-secondary rounded-full",
+            "flex items-center justify-center",
+            !isConnected && "opacity-50 cursor-not-allowed",
+            btnSize
+          )}
+          aria-label={isMicActive ? "Mikrofon stoppen" : "Mikrofon starten"}
+        >
+          {isMicActive ? (
+            <Mic className={iconSize} />
+          ) : (
+            <MicOff className={iconSize} />
+          )}
+        </button>
+      )}
 
       {/* Connect/Disconnect Button */}
       {isConnected ? (
