@@ -7,9 +7,10 @@ import { X } from 'lucide-react'
 interface VoiceSessionOverlayProps {
   isOpen: boolean
   onClose: () => void
+  userName?: string | null
 }
 
-export function VoiceSessionOverlay({ isOpen, onClose }: VoiceSessionOverlayProps) {
+export function VoiceSessionOverlay({ isOpen, onClose, userName }: VoiceSessionOverlayProps) {
   // ESC key closes the overlay
   useEffect(() => {
     if (!isOpen) return
@@ -52,7 +53,7 @@ export function VoiceSessionOverlay({ isOpen, onClose }: VoiceSessionOverlayProp
           >
             <X className="w-4 h-4" />
           </button>
-          <VoiceSessionApp />
+          <VoiceSessionApp userName={userName} />
         </div>
       </div>
 
@@ -77,7 +78,7 @@ export function VoiceSessionOverlay({ isOpen, onClose }: VoiceSessionOverlayProp
           >
             <X className="w-4 h-4" />
           </button>
-          <VoiceSessionApp />
+          <VoiceSessionApp userName={userName} />
         </div>
       </div>
     </>

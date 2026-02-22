@@ -72,8 +72,9 @@ export class AuthenticatedVoiceClient {
      * Connect to backend and authenticate
      * 
      * @param oneTimeToken - Token from On-Prem System
+     * @param userName     - Optional display name override for the session
      */
-    async connect(oneTimeToken: string): Promise<SessionInfo> {
+    async connect(oneTimeToken: string, userName?: string): Promise<SessionInfo> {
         return new Promise((resolve, reject) => {
             console.log('Connecting to backend...');
             
@@ -84,10 +85,11 @@ export class AuthenticatedVoiceClient {
                 console.log('WebSocket connected, authenticating...');
                 this._onConnected?.();
                 
-                // First message: Authentication with oneTimeToken
+                // First message: Authentication with oneTimeToken (and optional userName override)
                 this.ws!.send(JSON.stringify({
                     type: 'auth.init',
-                    oneTimeToken: oneTimeToken
+                    oneTimeToken: oneTimeToken,
+                    ...(userName ? { userName } : {})
                 }));
             };
             

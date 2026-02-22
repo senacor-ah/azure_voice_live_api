@@ -78,6 +78,51 @@ export default function LoginPage() {
                     </div>
                   )}
 
+                  {/* Name Group */}
+                  <div>
+                    <label
+                      htmlFor="name"
+                      className="block text-sm font-medium mb-2 text-slate-900"
+                    >
+                      Ihr Name
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        id="name"
+                        name="name"
+                        className={`py-2.5 sm:py-3 px-4 block w-full bg-white border rounded-lg sm:text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:pointer-events-none ${
+                          state?.errors?.name
+                            ? 'border-red-500'
+                            : 'border-slate-300'
+                        }`}
+                        required
+                        aria-describedby="name-error"
+                        placeholder="Max Mustermann"
+                      />
+                      {state?.errors?.name && (
+                        <div className="absolute inset-y-0 end-0 flex items-center pointer-events-none pe-3">
+                          <svg
+                            className="size-5 text-red-500"
+                            width="16"
+                            height="16"
+                            fill="currentColor"
+                            viewBox="0 0 16 16"
+                            aria-hidden="true"
+                          >
+                            <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM8 4a.905.905 0 0 0-.9.995l.35 3.507a.552.552 0 0 0 1.1 0l.35-3.507A.905.905 0 0 0 8 4zm.002 6a1 1 0 1 0 0 2 1 1 0 0 0 0-2z" />
+                          </svg>
+                        </div>
+                      )}
+                    </div>
+                    {state?.errors?.name && (
+                      <p className="text-xs text-red-600 mt-2" id="name-error">
+                        {state.errors.name}
+                      </p>
+                    )}
+                  </div>
+                  {/* End Name Group */}
+
                   {/* Email Group */}
                   <div>
                     <label

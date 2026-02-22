@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { GlobalVoiceWidget } from "@/app/components/GlobalVoiceWidget";
+import { getSession } from "@/app/lib/dal";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,11 +19,13 @@ export const metadata: Metadata = {
   description: "Wir gestalten die Bank der Zukunft – digital, fair und immer nah am Menschen.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const session = await getSession();
+
   return (
     <html lang="en">
       <body
@@ -31,7 +34,7 @@ export default function RootLayout({
         {children}
         {/* GlobalVoiceWidget is always mounted so the WebRTC connection
             survives client-side navigation between pages */}
-        <GlobalVoiceWidget />
+        <GlobalVoiceWidget userName={session?.name} />
       </body>
     </html>
   );

@@ -275,8 +275,10 @@ export class VoiceProxyHandler {
         return null
       }
 
+      const userNameOverride = msg.userName as string | undefined
+
       // Exchange token for Bearer Token (stays in backend!)
-      const session = await this.sessionManager.createSessionFromOneTimeToken(oneTimeToken)
+      const session = await this.sessionManager.createSessionFromOneTimeToken(oneTimeToken, userNameOverride)
       return session
     } catch (e) {
       console.error('Authentication error:', e)

@@ -44,12 +44,13 @@ export class AuthSessionManager {
 
   /**
    * Exchange oneTimeToken for Bearer Token and create session.
+   * @param userNameOverride - Optional name from the client session, overrides the token-derived name.
    */
-  async createSessionFromOneTimeToken(oneTimeToken: string): Promise<SessionInfo> {
+  async createSessionFromOneTimeToken(oneTimeToken: string, userNameOverride?: string): Promise<SessionInfo> {
     console.log('Exchanging oneTimeToken for Bearer token...')
 
     try {
-      const { bearerToken, userContext, expiresIn } = await this.exchangeToken(oneTimeToken)
+      const { bearerToken, userContext, expiresIn } = await this.exchangeToken(oneTimeToken, userNameOverride)
 
       const sessionId = `session-${uuidv4().replace(/-/g, '')}`
       const expiresAt = new Date(Date.now() + expiresIn * 1000)
@@ -84,11 +85,12 @@ export class AuthSessionManager {
    */
   private async exchangeToken(
     oneTimeToken: string,
+    userNameOverride?: string,
   ): Promise<{ bearerToken: string; userContext: UserContext; expiresIn: number }> {
     // 🔧 Development: Dummy Session for test tokens (no HTTP roundtrip needed)
     if (oneTimeToken === '123456_TOK' || oneTimeToken.startsWith('dev-')) {
       console.log(`🔧 Development Mode: Using dummy session for token '${oneTimeToken}'`)
-      return this.createDummySessionData()
+      return this.createDummySessionData(userNameOverride)
     }
 
     try {
@@ -213,8 +215,9 @@ export class AuthSessionManager {
 
   /**
    * Create dummy session data for development/testing.
+   * @param userNameOverride - When provided, replaces the default dummy name.
    */
-  private createDummySessionData(): {
+  private createDummySessionData(userNameOverride?: string): {
     bearerToken: string
     userContext: UserContext
     expiresIn: number
@@ -223,7 +226,7 @@ export class AuthSessionManager {
 
     const userContext: UserContext = {
       user_id: 'usr_42',
-      name: 'Anton Happel',
+      name: userNameOverride ?? 'Anton Happel',
       email: 'anton.happel@example.com',
       roles: ['admin', 'user', 'voice_user'],
       tenant_id: 'tenant_acme_corp',

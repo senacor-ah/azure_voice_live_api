@@ -7,6 +7,7 @@ import { redirect } from 'next/navigation'
 export async function login(state: FormState, formData: FormData): Promise<FormState> {
   // 1. Validate form fields
   const validatedFields = LoginFormSchema.safeParse({
+    name: formData.get('name'),
     email: formData.get('email'),
     password: formData.get('password'),
   })
@@ -18,7 +19,7 @@ export async function login(state: FormState, formData: FormData): Promise<FormS
     }
   }
 
-  const { email, password } = validatedFields.data
+  const { name, email, password } = validatedFields.data
 
   // 2. Check user credentials (in production würde man hier die Datenbank abfragen)
   const user = DEMO_USERS.find(
@@ -31,8 +32,8 @@ export async function login(state: FormState, formData: FormData): Promise<FormS
     }
   }
 
-  // 3. Create user session
-  await createSession(user.id, user.email, user.name)
+  // 3. Create user session — use the name entered in the form
+  await createSession(user.id, user.email, name)
 
   // 4. Redirect user
   redirect('/banking')

@@ -16,7 +16,11 @@ import { VoiceSessionOverlay } from './VoiceSessionOverlay'
  * VoiceSessionApp – and with it the WebRTC PeerConnection – stays alive
  * even when the overlay panel is closed.
  */
-export function GlobalVoiceWidget() {
+interface GlobalVoiceWidgetProps {
+  userName?: string | null
+}
+
+export function GlobalVoiceWidget({ userName }: GlobalVoiceWidgetProps) {
   const pathname = usePathname()
   const [isHovered, setIsHovered] = useState(false)
   const [isOpen, setIsOpen] = useState(false)
@@ -66,7 +70,7 @@ export function GlobalVoiceWidget() {
         RTCPeerConnection / WebSocket) are never unmounted by navigation.
         The overlay itself controls its own visibility via CSS.
       */}
-      <VoiceSessionOverlay isOpen={isOpen} onClose={() => setIsOpen(false)} />
+      <VoiceSessionOverlay isOpen={isOpen} onClose={() => setIsOpen(false)} userName={userName} />
     </>
   )
 }

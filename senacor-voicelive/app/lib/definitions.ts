@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 // Login Form Schema
 export const LoginFormSchema = z.object({
+  name: z.string().min(2, { message: 'Name muss mindestens 2 Zeichen lang sein.' }).trim(),
   email: z.string().email({ message: 'Bitte eine gültige E-Mail-Adresse eingeben.' }).trim(),
   password: z
     .string()
@@ -21,6 +22,7 @@ export type SessionPayload = {
 export type FormState =
   | {
       errors?: {
+        name?: string[]
         email?: string[]
         password?: string[]
       }

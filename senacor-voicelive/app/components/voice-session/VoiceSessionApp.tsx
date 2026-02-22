@@ -18,7 +18,11 @@ import { cn } from "@/lib/utils";
 
 type ConnectionStatus = "connected" | "connecting" | "disconnected" | "error";
 
-export function VoiceSessionApp() {
+interface VoiceSessionAppProps {
+  userName?: string | null
+}
+
+export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const [isMicActive, setIsMicActive] = useState(false);
   const [isTranscriptMode, setIsTranscriptMode] = useState(false);
@@ -92,6 +96,9 @@ export function VoiceSessionApp() {
   const fetchOneTimeToken = async () => {
     return 'dev-token';
   };
+
+  // Resolved display name: prefer session name, fall back to AI-returned name
+  const resolvedUserName = userName ?? sessionInfo?.userName ?? undefined;
 
   // Voice Client Setup
   const initializeVoiceClient = useCallback(() => {
@@ -462,8 +469,8 @@ export function VoiceSessionApp() {
       // 2. Voice Client initialisieren
       const client = initializeVoiceClient();
       
-      // 3. Verbinden und authentifizieren
-      const session = await client.connect(oneTimeToken);
+      // 3. Verbinden und authentifizieren (Name aus Session mitgeben)
+      const session = await client.connect(oneTimeToken, userName ?? undefined);
       
       setSessionInfo(session);
       setStatus("connected");
@@ -479,7 +486,7 @@ export function VoiceSessionApp() {
       setIsConnecting(false);
       connectionStartTimeRef.current = null;
     }
-  }, [initializeVoiceClient]);
+  }, [initializeVoiceClient, userName]);
 
   const handleNavigation = useCallback((item: NavItem) => {
     setActiveNav(item);
