@@ -1,6 +1,6 @@
 'use client';
 
-import { Mic, MicOff, PhoneOff, Phone, MessageSquare, Video, Keyboard } from "lucide-react";
+import { Mic, MicOff, PhoneOff, Phone, Keyboard } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface SessionControlsProps {
@@ -43,25 +43,7 @@ export function SessionControls({
       )}
       style={{background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(12px)', border: '1px solid #e2e8f0'}}
     >
-      {/* Toggle View Button (Avatar ↔ Transcript) – hidden in text mode */}
-      {!isTextMode && (
-        <button
-          onClick={onTranscriptToggle}
-          disabled={!isConnected}
-          className={cn(
-            "control-btn-secondary rounded-full flex items-center justify-center",
-            !isConnected && "opacity-50 cursor-not-allowed",
-            btnSize
-          )}
-          title={isTranscriptMode ? "Avatar anzeigen" : "Transkript anzeigen"}
-        >
-          {isTranscriptMode ? (
-            <Video className={iconSize} />
-          ) : (
-            <MessageSquare className={iconSize} />
-          )}
-        </button>
-      )}
+
 
       {/* Text Mode Toggle Button */}
       <button

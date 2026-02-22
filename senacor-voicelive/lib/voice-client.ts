@@ -50,8 +50,10 @@ export class AuthenticatedVoiceClient {
     private micStream: MediaStream | null = null;
     private micSource: MediaStreamAudioSourceNode | null = null;
     
-    // Recording state
-    private isRecording: boolean = true;
+    // Recording state – starts OFF so PTT mode doesn't stream audio immediately
+    private isRecording: boolean = false;
+    // True while Azure is generating/streaming a response
+    private isResponseActive: boolean = false;
     
     // WebRTC for Avatar
     private peerConnection: RTCPeerConnection | null = null;
@@ -190,12 +192,14 @@ export class AuthenticatedVoiceClient {
                 // Handle response done
                 else if (message.type === 'response.done') {
                     console.log('Response done');
+                    this.isResponseActive = false;
                     this._onResponseDone?.(message.estimatedRemainingPlaybackMs, message.totalAudioDurationMs);
                 }
                 
                 // Handle response started
                 else if (message.type === 'response.started') {
                     console.log('Response started');
+                    this.isResponseActive = true;
                     this._onResponseStarted?.();
                 }
                 
@@ -432,19 +436,88 @@ export class AuthenticatedVoiceClient {
     }
 
     /**
-     * Start recording (unmute microphone)
+     * Start recording (unmute microphone / PTT press).
+     * Cancels any in-flight Azure response so the pipeline is free for
+     * the new turn. Audio will begin flowing to Azure immediately; the VAD
+     * will auto-trigger a response once silence is detected after the button
+     * is released (VAD-gated PTT pattern, same as official samples).
      */
     startRecording(): void {
         this.isRecording = true;
-        console.log('Recording started');
+        // Cancel any response still generating (barge-in)
+        this.cancelResponse();
+        console.log('🎤 Recording started');
     }
 
     /**
-     * Stop recording (mute microphone)
+     * Stop recording (PTT release).
+     * Sends ~400 ms of PCM16 silence so Azure's VAD receives the silence
+     * signal it needs to fire speech.stopped and auto-generate a response.
+     * Without this, no frames arrive after PTT release and the VAD never
+     * detects end-of-speech (same technique as the official samples where
+     * the mic stream runs continuously and silent frames keep flowing).
      */
     stopRecording(): void {
         this.isRecording = false;
-        console.log('Recording stopped');
+
+        if (this.ws && this.ws.readyState === WebSocket.OPEN && this.isAuthenticated) {
+            // 400 ms × 24000 Hz × 2 bytes/sample = 19200 bytes of silence
+            const silenceSamples = Math.round(24000 * 0.4);
+            const silenceBuffer = new ArrayBuffer(silenceSamples * 2); // Int16 = 2 bytes, all zeros
+            const base64Silence = this._arrayBufferToBase64(silenceBuffer);
+            this.ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: base64Silence }));
+        }
+
+        console.log('\uD83C\uDF99\uFE0F Recording stopped (silence pad sent)');
+    }
+
+    /**
+     * PTT release: stop recording and commit the audio buffer.
+     * This explicitly tells Azure the turn is done so the VAD fires
+     * speech.stopped immediately, without waiting for silent audio frames
+     * (which we never send because we stop the audio stream entirely).
+     */
+    commitBuffer(): void {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isAuthenticated) {
+            console.warn('commitBuffer: not connected');
+            return;
+        }
+        this.ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+        console.log('🎤 PTT released – audio buffer committed');
+    }
+
+    /**
+     * PTT release: stop recording, commit the audio buffer, and request a response.
+     * Use this instead of stopRecording() when PTT mode is active (VAD disabled).
+     */
+    commitAndRespond(): void {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isAuthenticated) {
+            console.warn('commitAndRespond: not connected');
+            return;
+        }
+        // If Azure is still in a response, cancel it first so the new turn is accepted
+        if (this.isResponseActive) {
+            this.cancelResponse();
+        }
+        // Commit whatever audio Azure has buffered so far
+        this.ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+        // Tell Azure to generate a response now
+        this.ws.send(JSON.stringify({ type: 'response.create' }));
+        console.log('🎤 PTT released – audio committed, response requested');
+    }
+
+    /**
+     * Cancel any in-flight Azure response.
+     * Safe to call even if no response is active.
+     */
+    cancelResponse(): void {
+        if (!this.isResponseActive) {
+            return;
+        }
+        if (this.ws && this.ws.readyState === WebSocket.OPEN && this.isAuthenticated) {
+            this.ws.send(JSON.stringify({ type: 'response.cancel' }));
+            this.isResponseActive = false;
+        }
     }
 
     /**

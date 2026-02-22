@@ -70,6 +70,8 @@ export interface VoiceProxyConfig {
   azureAvatarVideoHeight: number
   azureAvatarVideoBitrate: number
   azureAvatarIceUrls: string | null
+  /** When true, VAD (turn detection) is disabled – the client manually commits audio via PTT */
+  pttMode: boolean
 }
 
 // ============================================================================
@@ -337,6 +339,24 @@ export class VoiceProxyHandler {
       ? this.buildAvatarConfig()
       : undefined
 
+    // VAD-gated PTT: VAD stays active with a short silence window.
+    // Audio is only forwarded while the PTT button is held (isRecording gate
+    // in voice-client.ts). When the button is released, audio stops arriving
+    // and the VAD detects silence after ~200 ms → triggers response automatically.
+    // This is exactly the pattern used in the official microsoft-foundry/voicelive-samples.
+    if (this.config.pttMode) {
+      console.log('🎙️ PTT mode active – VAD-gated (audio gating via client, VAD silence=200ms)')
+    }
+
+    const turnDetection = {
+      threshold: 0.5,
+      prefixPaddingMs: 300,
+      // Short silence window: in PTT mode audio stops on button release, so
+      // the VAD fires quickly; in VAD-only mode this keeps responses snappy.
+      silenceDurationMs: this.config.pttMode ? 200 : 500,
+      type: 'azure_semantic_vad',
+    } as AzureSemanticVad
+
     if (this.config.useAzureAiAgents && this.config.azureAgentId) {
       // Agent mode: Only configure voice and turn detection
       return {
@@ -344,12 +364,7 @@ export class VoiceProxyHandler {
           name: this.config.azureVoiceName,
           type: 'azure-standard',
         } as AzureStandardVoice,
-        turnDetection: {
-          threshold: 0.5,
-          prefixPaddingMs: 300,
-          silenceDurationMs: 500,
-          type: 'azure_semantic_vad',
-        } as AzureSemanticVad,
+        turnDetection,
         inputAudioTranscription: {
           model: 'whisper-1',
         } as AudioInputTranscriptionOptions,
@@ -376,12 +391,7 @@ export class VoiceProxyHandler {
         type: 'azure-standard',
       } as AzureStandardVoice,
       temperature: 0.7,
-      turnDetection: {
-        threshold: 0.5,
-        prefixPaddingMs: 300,
-        silenceDurationMs: 500,
-        type: 'azure_semantic_vad',
-      } as AzureSemanticVad,
+      turnDetection,
       inputAudioTranscription: {
         model: 'whisper-1',
       } as AudioInputTranscriptionOptions,
@@ -739,6 +749,34 @@ WICHTIGE REGELN:
           : (raw.message != null ? JSON.stringify(raw.message) : JSON.stringify(raw))
         const errorCode = raw.code ?? 'unknown'
         console.error(`❌ Azure error: ${errorMessage} (code: ${errorCode})`)
+
+        // Avatar capacity exhausted – fallback to audio-only mode for this session
+        if (errorCode === 'avatar_service_resource_exhausted') {
+          console.warn('⚠️ Avatar service exhausted – falling back to audio-only for this session')
+          try {
+            // Drop avatar config so Azure stops trying to allocate avatar resources
+            await azureSession.updateSession({ avatar: undefined } as RequestSession)
+            // Inform the client that avatar is disabled now
+            this.sendMessage(clientWs, {
+              type: 'session.updated',
+              session: {
+                id: session.sessionId,
+                avatar_enabled: false,
+                avatar: null,
+              },
+            })
+            // Trigger greeting if not already sent (non-avatar path)
+            if (!session.greetingSent) {
+              session.greetingSent = true
+              await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+            }
+          } catch (e) {
+            console.error('Failed to fallback to audio-only after avatar exhaustion:', e)
+          }
+          // Do NOT forward to client – the session continues in audio-only mode
+          return
+        }
+
         this.sendMessage(clientWs, { type: 'error', error: { message: errorMessage, code: errorCode } })
       },
 
@@ -819,6 +857,15 @@ WICHTIGE REGELN:
         if (recorder) recorder.addEvent('user_speech_started')
         await eventStreaming.publishSpeechStarted(session.sessionId, userId)
         this.sendMessage(clientWs, { type: 'speech.started', timestamp: new Date().toISOString() })
+
+        // Mirror the official voice-live-universal-assistant pattern:
+        // always cancel any in-flight response server-side on speech.started,
+        // without waiting for a client round-trip. Benign if no response is active.
+        try {
+          await azureSession.sendEvent({ type: 'response.cancel' } as import('@azure/ai-voicelive').ClientEventUnion)
+        } catch {
+          // "no active response" errors are expected and harmless
+        }
       },
 
       // --- Speech Stopped ---
@@ -1531,5 +1578,6 @@ export function getVoiceProxyConfig(): VoiceProxyConfig {
     azureAvatarVideoHeight: parseInt(process.env.AZURE_AVATAR_VIDEO_HEIGHT ?? '720', 10),
     azureAvatarVideoBitrate: parseInt(process.env.AZURE_AVATAR_VIDEO_BITRATE ?? '2000000', 10),
     azureAvatarIceUrls: process.env.AZURE_AVATAR_ICE_URLS || null,
+    pttMode: (process.env.PTT_MODE ?? 'true').toLowerCase() === 'true',
   }
 }

@@ -84,7 +84,7 @@ Format your answer in a clear, readable way.`
       const stream = await this.client.chat.completions.create({
         model: this.deploymentName,
         messages,
-        max_tokens: maxTokens,
+        max_completion_tokens: maxTokens,
         stream: true,
       })
 

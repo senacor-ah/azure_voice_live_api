@@ -5,8 +5,7 @@ import { SessionHeader } from "./SessionHeader";
 import { SessionStats } from "./SessionStats";
 import { SessionControls } from "./SessionControls";
 import { AvatarDisplay } from "./AvatarDisplay";
-import { TranscriptView, Message } from "./TranscriptView";
-import { TextInputBar } from "./TextInputBar";
+import { VoiceChatView, type ChatMessage as Message } from "./VoiceChatView";
 import { AudioVisualizer } from "./AudioVisualizer";
 import { BottomNavigation, NavItem } from "./BottomNavigation";
 import { AccountsView } from "./AccountsView";
@@ -20,9 +19,10 @@ type ConnectionStatus = "connected" | "connecting" | "disconnected" | "error";
 
 interface VoiceSessionAppProps {
   userName?: string | null
+  isOpen?: boolean
 }
 
-export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
+export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const [isMicActive, setIsMicActive] = useState(false);
   const [isTranscriptMode, setIsTranscriptMode] = useState(false);
@@ -39,6 +39,9 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
   const [pendingTransfer, setPendingTransfer] = useState<any>(null);
   const [transferCallId, setTransferCallId] = useState<string | null>(null);
   const [hasVideoConnection, setHasVideoConnection] = useState(false);
+  const [isPttPressed, setIsPttPressed] = useState(false);
+  // Ref mirrors the state so PTT callbacks stay stable (no isPttPressed in useCallback deps)
+  const isPttPressedRef = useRef(false);
   const [isLoadingTransfer, setIsLoadingTransfer] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   
@@ -199,7 +202,18 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const currentAiTextRef = useRef<string>('');
   const currentAiMessageIdRef = useRef<string | null>(null);
+  // PTT button refs – used to attach non-passive touch listeners
+  const pttAvatarBtnRef = useRef<HTMLButtonElement>(null);
+  const pttTranscriptBtnRef = useRef<HTMLButtonElement>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+
+  // Auto-connect when overlay is opened
+  useEffect(() => {
+    if (isOpen && status === 'disconnected' && !isConnecting) {
+      handleConnect();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   // Calculate average response time
   useEffect(() => {
@@ -538,6 +552,27 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
     }
   }, [isMicActive, status]);
 
+  const handlePttStart = useCallback(() => {
+    const client = voiceClientRef.current;
+    if (!client || status !== "connected" || isPttPressedRef.current) return;
+    isPttPressedRef.current = true;
+    setIsPttPressed(true);
+    client.startRecording();
+    setIsMicActive(true);
+  // status is the only external dep; isPttPressedRef is a ref (stable)
+  }, [status]);
+
+  const handlePttEnd = useCallback(() => {
+    const client = voiceClientRef.current;
+    if (!client || !isPttPressedRef.current) return;
+    isPttPressedRef.current = false;
+    setIsPttPressed(false);
+    client.stopRecording(); // sends silence pad → VAD → speech.stopped → auto-response
+    setIsMicActive(false);
+  // No deps on isPttPressedRef (ref) – callback is stable
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleDisconnect = useCallback(() => {
     // Cancel any pending speech coordinator timers
     if (uiActionTimerRef.current) {
@@ -563,6 +598,8 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
     setShowAppointmentModal(false);
     setIsLoadingAppointments(false);
     setIsMicActive(false);
+    setIsPttPressed(false);
+    isPttPressedRef.current = false;
     setIsTranscriptMode(false);
     setIsTextMode(false);
     isTextModeRef.current = false;
@@ -770,6 +807,41 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
 
   const isConnected = status === "connected";
 
+  // Attach non-passive touch + contextmenu listeners to PTT buttons
+  // (React synthetic touch handlers are passive by default → can't call preventDefault)
+  useEffect(() => {
+    const buttons = [
+      pttAvatarBtnRef.current,
+      pttTranscriptBtnRef.current,
+    ].filter(Boolean) as HTMLButtonElement[];
+
+    const onTouchStart = (e: TouchEvent) => { e.preventDefault(); handlePttStart(); };
+    const onTouchEnd   = (e: TouchEvent) => { e.preventDefault(); handlePttEnd(); };
+    const onCtxMenu    = (e: Event)      => e.preventDefault();
+
+    buttons.forEach((btn) => {
+      btn.addEventListener('touchstart',  onTouchStart, { passive: false });
+      btn.addEventListener('touchend',    onTouchEnd,   { passive: false });
+      btn.addEventListener('touchcancel', onTouchEnd,   { passive: false });
+      btn.addEventListener('contextmenu', onCtxMenu,    { passive: false });
+    });
+
+    return () => {
+      buttons.forEach((btn) => {
+        btn.removeEventListener('touchstart',  onTouchStart);
+        btn.removeEventListener('touchend',    onTouchEnd);
+        btn.removeEventListener('touchcancel', onTouchEnd);
+        btn.removeEventListener('contextmenu', onCtxMenu);
+      });
+    };
+  // Re-run whenever the buttons mount/unmount (connected/mode state changes)
+  // NOTE: handlePttStart/End are intentionally excluded – they are now stable
+  // (no isPttPressed in their useCallback deps) and use a ref for the pressed-state
+  // guard. Including them here would cause the effect to re-run on every press,
+  // briefly detaching listeners and swallowing touch events.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected, isTranscriptMode, isTextMode]);
+
   return (
     <div className="phone-container flex flex-col h-full" style={{background: '#f5f5f5', color: '#1a1a2e'}}>
       {/* Main Content Area */}
@@ -808,18 +880,19 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
                   />
                 </div>
 
-                {/* Transcript View - visible in transcript mode OR text mode */}
+                {/* Chat View - visible in transcript mode OR text mode */}
                 <div 
                   className={cn(
-                    "absolute inset-0 w-full h-full p-4 overflow-y-auto transition-opacity duration-300",
+                    "absolute inset-0 w-full h-full transition-opacity duration-300",
                     (isTranscriptMode || isTextMode) ? "opacity-100 z-10" : "opacity-0 pointer-events-none z-0"
                   )}
-                  style={{background: '#f8faff'}}
                 >
-                  <TranscriptView
+                  <VoiceChatView
                     messages={messages}
                     isSessionActive={isConnected}
+                    isTextMode={isTextMode}
                     isLoading={isTextMode && isWaitingForResponse && !messages.some(m => m.id === 'ai-streaming')}
+                    onSendText={isConnected ? handleSendText : undefined}
                     appointmentBadges={
                       isTextMode && showAppointmentModal && appointmentData
                         ? {
@@ -851,6 +924,40 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
                     />
                   </div>
                 )}
+
+                {/* Push-to-Talk Button – Avatar Mode */}
+                {!isTranscriptMode && !isTextMode && isConnected && (
+                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-1 select-none">
+                    <button
+                      ref={pttAvatarBtnRef}
+                      onMouseDown={handlePttStart}
+                      onMouseUp={handlePttEnd}
+                      onMouseLeave={handlePttEnd}
+                      className={cn(
+                        "flex items-center justify-center rounded-full transition-all duration-150 shadow-xl",
+                        "w-20 h-20 ring-4",
+                        isPttPressed
+                          ? "bg-red-500 ring-red-300 scale-110 shadow-red-400/50"
+                          : "bg-white ring-white/60 active:scale-95",
+                      )}
+                      style={{ touchAction: 'none', WebkitTouchCallout: 'none' } as React.CSSProperties}
+                      aria-label="Halten zum Sprechen"
+                    >
+                      {isPttPressed ? (
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" className="w-9 h-9 animate-pulse">
+                          <path d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+                        </svg>
+                      ) : (
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#1a1a2e" strokeWidth="1.8" className="w-9 h-9">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+                        </svg>
+                      )}
+                    </button>
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.85)', color: '#1a1a2e' }}>
+                      {isPttPressed ? "Sprechen…" : "Halten zum Sprechen"}
+                    </span>
+                  </div>
+                )}
               </div>
               
               {/* Bottom Part: Controls */}
@@ -859,15 +966,7 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
                 {/* Controls in Transcript or Text Mode */}
                 {(isTranscriptMode || isTextMode) && (
                   <div className="flex flex-col gap-2 pb-2">
-                    {/* Text input bar – only in text mode */}
-                    {isTextMode && (
-                      <TextInputBar
-                        onSendText={handleSendText}
-                        disabled={!isConnected}
-                        className="mx-3"
-                      />
-                    )}
-                    <div className="flex justify-center">
+                    <div className="flex justify-center items-center gap-4">
                       <SessionControls
                         isMicActive={isMicActive}
                         isTranscriptMode={isTranscriptMode}
@@ -881,6 +980,39 @@ export function VoiceSessionApp({ userName }: VoiceSessionAppProps) {
                         variant="compact"
                         className="shadow-md"
                       />
+                      {/* Push-to-Talk Button – Transcript Mode */}
+                      {isTranscriptMode && !isTextMode && isConnected && (
+                        <div className="flex flex-col items-center gap-1 select-none">
+                          <button
+                            ref={pttTranscriptBtnRef}
+                            onMouseDown={handlePttStart}
+                            onMouseUp={handlePttEnd}
+                            onMouseLeave={handlePttEnd}
+                            className={cn(
+                              "flex items-center justify-center rounded-full transition-all duration-150 shadow-lg",
+                              "w-14 h-14 ring-2",
+                              isPttPressed
+                                ? "bg-red-500 ring-red-300 scale-110"
+                                : "bg-white ring-gray-200 active:scale-95",
+                            )}
+                            style={{ touchAction: 'none', WebkitTouchCallout: 'none' } as React.CSSProperties}
+                            aria-label="Halten zum Sprechen"
+                          >
+                            {isPttPressed ? (
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" className="w-6 h-6 animate-pulse">
+                                <path d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+                              </svg>
+                            ) : (
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#1a1a2e" strokeWidth="1.8" className="w-6 h-6">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+                              </svg>
+                            )}
+                          </button>
+                          <span className="text-xs" style={{ color: '#64748b' }}>
+                            {isPttPressed ? "Sprechen…" : "Halten"}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

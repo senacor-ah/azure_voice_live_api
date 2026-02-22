@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+/* include utility classes in streamdown */
+@source "../node_modules/streamdown/dist/index.js";
+
+/* animations */
+@plugin "tailwindcss-animate";
+
 html {
   scroll-behavior: smooth;
 }
@@ -32,11 +38,46 @@ html {
   --glass-bg: rgba(255, 255, 255, 0.75);
   --glass-border: rgba(125, 160, 215, 0.2);
   --glass-blur: 16px;
+
+  /* ── shadcn/ui semantic tokens ──────────────────────────── */
+  --card: #ffffff;
+  --card-foreground: #1a1a2e;
+  --popover: #ffffff;
+  --popover-foreground: #1a1a2e;
+  --primary-foreground: #ffffff;
+  --secondary: #eef3fb;
+  --secondary-foreground: #1a1a2e;
+  --muted: #eef3fb;
+  --muted-foreground: #64748b;
+  --accent: #e8f0fb;
+  --accent-foreground: #1a1a2e;
+  --destructive-foreground: #ffffff;
+  --border: #e2e8f0;
+  --input: #e2e8f0;
+  --ring: #7da0d7;
+  --radius: 0.5rem;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
