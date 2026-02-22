@@ -100,7 +100,7 @@ export default async function ProduktePage() {
 
   return (
     <div className="min-h-screen bg-[#f5f7fa] font-sans">
-      <StickyHeader userName={session.name} />
+      <StickyHeader userName={session.name} variant="solid" />
 
       {/* ── HERO ── */}
       <section className="relative pt-36 pb-20 bg-gradient-to-br from-[#e8e8e8] via-[#ebebeb] to-[#dcdcdc]">

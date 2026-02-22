@@ -35,7 +35,7 @@ export async function login(state: FormState, formData: FormData): Promise<FormS
   await createSession(user.id, user.email, user.name)
 
   // 4. Redirect user
-  redirect('/')
+  redirect('/banking')
 }
 
 export async function logout() {

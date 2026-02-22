@@ -1,15 +1,15 @@
-import { verifySession } from '@/app/lib/dal'
+import { getSession } from '@/app/lib/dal'
 import { StickyHeader } from '@/app/components/StickyHeader'
 import Link from 'next/link'
 
 export default async function Home() {
-  const session = await verifySession()
+  const session = await getSession()
 
   return (
     <div className="min-h-screen bg-[#e8e8e8] font-sans overflow-x-hidden">
 
       {/* ── NAV ── */}
-      <StickyHeader userName={session.name} />
+      <StickyHeader userName={session?.name} />
 
       {/* ── HERO ── */}
       <section id="hero" className="relative min-h-screen flex items-center">

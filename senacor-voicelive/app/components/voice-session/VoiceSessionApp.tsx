@@ -568,6 +568,20 @@ export function VoiceSessionApp() {
     if (voiceClientRef.current && appointmentCallId) {
       console.log('📅 Appointment selected (Workflow validation):', appointment);
       
+      // Add user message to transcript showing the selection
+      const dateObj = new Date(appointment.datum);
+      const days = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+      const formattedDate = `${days[dateObj.getDay()]}, ${dateObj.getDate()}. ${dateObj.toLocaleString('de-DE', { month: 'long' })} ${dateObj.getFullYear()}`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `appointment-select-${Date.now()}`,
+          role: 'user' as const,
+          content: `📅 Termin ausgewählt: ${formattedDate} um ${appointment.uhrzeit} Uhr`,
+          timestamp: new Date(),
+        },
+      ]);
+      
       // Send selection to backend for workflow validation
       voiceClientRef.current.sendFunctionResult(appointmentCallId, {
         selected: true,
@@ -590,6 +604,17 @@ export function VoiceSessionApp() {
   const handleAppointmentCancel = useCallback(() => {
     if (voiceClientRef.current && appointmentCallId) {
       console.log('❌ Appointment selection cancelled');
+      
+      // Add user message to transcript showing the cancellation
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `appointment-cancel-${Date.now()}`,
+          role: 'user' as const,
+          content: '❌ Terminauswahl abgebrochen',
+          timestamp: new Date(),
+        },
+      ]);
       
       voiceClientRef.current.sendFunctionResult(appointmentCallId, {
         selected: false,
