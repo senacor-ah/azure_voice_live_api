@@ -499,10 +499,10 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
             console.warn('⚠️ Invalid workflow state for UI display:', workflowState);
           }
           
-          // Cache data and show loading, but don't show modal yet
+          // Cache data, but don't show any overlay or modal yet – wait for audio drain
           setAppointmentData(parsedArgs);
           setAppointmentCallId(callId);
-          setIsLoadingAppointments(true);
+          setIsLoadingAppointments(false);
           setShowAppointmentModal(false);
           pendingUiActionRef.current = 'appointment';
           
