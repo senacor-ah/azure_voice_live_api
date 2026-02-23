@@ -8,6 +8,23 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.bufferSize = 2048; // Collect samples before sending
     this.buffer = new Int16Array(this.bufferSize);
     this.bufferIndex = 0;
+    // Gate: only forward audio while PTT is pressed (START_RECORDING / STOP_RECORDING)
+    this.isRecording = false;
+
+    this.port.onmessage = (e) => {
+      if (e.data && e.data.command === 'START_RECORDING') {
+        this.isRecording = true;
+        this.bufferIndex = 0; // discard any stale samples
+      } else if (e.data && e.data.command === 'STOP_RECORDING') {
+        // Flush remaining buffered samples before closing the gate
+        if (this.bufferIndex > 0) {
+          const audioData = this.buffer.slice(0, this.bufferIndex);
+          this.port.postMessage(audioData.buffer);
+          this.bufferIndex = 0;
+        }
+        this.isRecording = false;
+      }
+    };
   }
 
   /**
@@ -31,6 +48,11 @@ class AudioProcessor extends AudioWorkletProcessor {
     
     // Check if we have audio input
     if (!input || !input[0]) {
+      return true;
+    }
+
+    // Only process while PTT is active
+    if (!this.isRecording) {
       return true;
     }
 

@@ -118,6 +118,8 @@ export interface SessionInfo {
   responseTranscriptTtsDurationMs?: number
   /** Timestamp (ms) when the transcript for the current response was completed */
   responseTranscriptDoneTime?: number
+  /** Whether the session is currently in text-only mode (no audio) */
+  isTextMode?: boolean
 }
 
 export interface AppointmentCacheData {

@@ -339,23 +339,24 @@ export class VoiceProxyHandler {
       ? this.buildAvatarConfig()
       : undefined
 
-    // VAD-gated PTT: VAD stays active with a short silence window.
-    // Audio is only forwarded while the PTT button is held (isRecording gate
-    // in voice-client.ts). When the button is released, audio stops arriving
-    // and the VAD detects silence after ~200 ms → triggers response automatically.
-    // This is exactly the pattern used in the official microsoft-foundry/voicelive-samples.
+    // PTT mode: disable VAD entirely (turn_detection: null).
+    // The client manually controls the turn via input_audio_buffer.commit +
+    // response.create on PTT release. This is the canonical PTT flow per the
+    // Azure Voice Live API docs and prevents the avatar from reacting to any
+    // background audio when the button is not held.
+    // VAD-only mode: use azure_semantic_vad with a short silence window.
     if (this.config.pttMode) {
-      console.log('🎙️ PTT mode active – VAD-gated (audio gating via client, VAD silence=200ms)')
+      console.log('🎙️ PTT mode active – VAD disabled, manual commit+respond on release')
     }
 
-    const turnDetection = {
-      threshold: 0.5,
-      prefixPaddingMs: 300,
-      // Short silence window: in PTT mode audio stops on button release, so
-      // the VAD fires quickly; in VAD-only mode this keeps responses snappy.
-      silenceDurationMs: this.config.pttMode ? 200 : 500,
-      type: 'azure_semantic_vad',
-    } as AzureSemanticVad
+    const turnDetection = this.config.pttMode
+      ? null
+      : ({
+          threshold: 0.5,
+          prefixPaddingMs: 300,
+          silenceDurationMs: 500,
+          type: 'azure_semantic_vad',
+        } as AzureSemanticVad)
 
     if (this.config.useAzureAiAgents && this.config.azureAgentId) {
       // Agent mode: Only configure voice and turn detection
@@ -369,7 +370,8 @@ export class VoiceProxyHandler {
           model: 'whisper-1',
         } as AudioInputTranscriptionOptions,
         inputAudioNoiseReduction: { type: 'azure_deep_noise_suppression' },
-        inputAudioEchoCancellation: { type: 'server_echo_cancellation' },
+        // server_echo_cancellation is not supported when turn_detection is null (PTT mode)
+        ...(turnDetection !== null ? { inputAudioEchoCancellation: { type: 'server_echo_cancellation' } } : {}),
         avatar: avatarConfig,
         toolChoice: 'auto',
       } as RequestSession
@@ -396,7 +398,8 @@ export class VoiceProxyHandler {
         model: 'whisper-1',
       } as AudioInputTranscriptionOptions,
       inputAudioNoiseReduction: { type: 'azure_deep_noise_suppression' },
-      inputAudioEchoCancellation: { type: 'server_echo_cancellation' },
+      // server_echo_cancellation is not supported when turn_detection is null (PTT mode)
+      ...(turnDetection !== null ? { inputAudioEchoCancellation: { type: 'server_echo_cancellation' } } : {}),
       avatar: avatarConfig,
     } as RequestSession
   }
@@ -1032,8 +1035,8 @@ WICHTIGE REGELN:
       output: JSON.stringify(functionOutput),
     } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
 
-    // Trigger response
-    await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+    // Trigger response (text-mode-aware)
+    await this.sendResponseCreate(azureSession, session)
 
     console.log(`✅ Workflow started: ${context.state}`)
     return true // Handled
@@ -1151,7 +1154,7 @@ WICHTIGE REGELN:
       output: JSON.stringify(functionOutput),
     } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
 
-    await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+    await this.sendResponseCreate(azureSession, session)
 
     // Reset state machine
     session.appointmentFlowState = AppointmentFlowState.CONFIRMED
@@ -1183,6 +1186,10 @@ WICHTIGE REGELN:
       const answer = ragResult.answer ?? ''
       const sources = ragResult.sources ?? []
       console.log(`✅ RAG answer generated (${answer.length} chars, ${sources.length} sources)`)
+      console.log(`📖 RAG Answer: "${answer}"`)
+      if (sources.length > 0) {
+        console.log(`📚 RAG Sources: ${sources.map(s => s.source).join(', ')}`)
+      }
       functionOutput = { success: true, answer, source_count: sources.length }
     } else {
       const error = ragResult.error ?? 'Unbekannter Fehler'
@@ -1190,18 +1197,22 @@ WICHTIGE REGELN:
       functionOutput = { success: false, error }
     }
 
+    // Log the exact output being sent to Azure for debugging
+    const outputJson = JSON.stringify(functionOutput)
+    console.log(`📤 RAG function_call_output to Azure: ${outputJson}`)
+
     // Send to Azure
     await azureSession.addConversationItem({
       type: 'function_call_output',
       callId,
-      output: JSON.stringify(functionOutput),
+      output: outputJson,
     } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
 
     await eventStreaming.publishFunctionCalled(
       session.sessionId, 'wissen_abfragen', args, functionOutput, callId, userId,
     )
 
-    await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+    await this.sendResponseCreate(azureSession, session)
 
     console.log('✅ RAG result sent to Azure')
     return true // Handled
@@ -1290,6 +1301,17 @@ WICHTIGE REGELN:
               }
             }
             return
+          }
+
+          // Track text mode changes from session.update
+          if (msg.type === 'session.update') {
+            const sessionData = msg.session as Record<string, unknown> | undefined
+            const modalities = sessionData?.modalities as string[] | undefined
+            if (modalities) {
+              const wasTextMode = session.isTextMode
+              session.isTextMode = modalities.length === 1 && modalities[0] === 'text'
+              console.log(`💬 Server tracking modalities change: ${JSON.stringify(modalities)} → isTextMode=${session.isTextMode}${wasTextMode !== session.isTextMode ? ' (CHANGED)' : ''}`)
+            }
           }
 
           // Forward other message types as events
@@ -1393,7 +1415,7 @@ WICHTIGE REGELN:
               role: 'user',
               content: [{ type: 'input_text', text: confirmMessage }],
             } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
-            await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+            await this.sendResponseCreate(azureSession, session)
 
             session.workflowActive = false
             session.appointmentFlowState = AppointmentFlowState.CONFIRMED
@@ -1405,7 +1427,7 @@ WICHTIGE REGELN:
               role: 'user',
               content: [{ type: 'input_text', text: errorMessage }],
             } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
-            await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+            await this.sendResponseCreate(azureSession, session)
 
             session.workflowActive = false
             console.log('❌ Appointment workflow failed')
@@ -1420,7 +1442,7 @@ WICHTIGE REGELN:
             role: 'user',
             content: [{ type: 'input_text', text: cancelMessage }],
           } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
-          await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+          await this.sendResponseCreate(azureSession, session)
 
           session.workflowActive = false
           session.appointmentFlowState = AppointmentFlowState.IDLE
@@ -1498,8 +1520,8 @@ WICHTIGE REGELN:
         output: JSON.stringify(result),
       } as unknown as import('@azure/ai-voicelive').ConversationRequestItem)
 
-      // Trigger response
-      await azureSession.sendEvent({ type: 'response.create' } as import('@azure/ai-voicelive').ClientEventUnion)
+      // Trigger response (text-mode-aware)
+      await this.sendResponseCreate(azureSession, session)
 
       console.log('✅ Function call result sent to Azure, response triggered')
     } catch (e) {
@@ -1544,6 +1566,28 @@ WICHTIGE REGELN:
 
   private sendError(ws: WsWebSocket, errorMessage: string): void {
     this.sendMessage(ws, { type: 'error', error: { message: errorMessage } })
+  }
+
+  /**
+   * Send response.create to Azure, automatically including modalities: ['text']
+   * when the session is in text mode. This ensures Azure generates a text-only
+   * response after function call outputs in chat mode.
+   */
+  private async sendResponseCreate(
+    azureSession: VoiceLiveSession,
+    session: SessionInfo,
+  ): Promise<void> {
+    if (session.isTextMode) {
+      console.log('📝 Sending response.create with modalities: [text] (text mode active)')
+      await azureSession.sendEvent({
+        type: 'response.create',
+        response: { modalities: ['text'] },
+      } as unknown as import('@azure/ai-voicelive').ClientEventUnion)
+    } else {
+      await azureSession.sendEvent({
+        type: 'response.create',
+      } as import('@azure/ai-voicelive').ClientEventUnion)
+    }
   }
 }
 

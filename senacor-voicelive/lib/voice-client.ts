@@ -52,6 +52,9 @@ export class AuthenticatedVoiceClient {
     
     // Recording state – starts OFF so PTT mode doesn't stream audio immediately
     private isRecording: boolean = false;
+    // Counts audio frames sent to Azure during the current PTT press.
+    // Used to guard against committing an empty buffer (which returns an error).
+    private audioFramesSent: number = 0;
     // True while Azure is generating/streaming a response
     private isResponseActive: boolean = false;
     
@@ -353,6 +356,7 @@ export class AuthenticatedVoiceClient {
                 type: 'input_audio_buffer.append',
                 audio: base64Audio
             }));
+            this.audioFramesSent++;
         }
     }
     
@@ -444,6 +448,9 @@ export class AuthenticatedVoiceClient {
      */
     startRecording(): void {
         this.isRecording = true;
+        this.audioFramesSent = 0;
+        // Tell the worklet to start forwarding audio frames
+        this.audioWorklet?.port.postMessage({ command: 'START_RECORDING' });
         // Cancel any response still generating (barge-in)
         this.cancelResponse();
         console.log('🎤 Recording started');
@@ -451,24 +458,32 @@ export class AuthenticatedVoiceClient {
 
     /**
      * Stop recording (PTT release).
-     * Sends ~400 ms of PCM16 silence so Azure's VAD receives the silence
-     * signal it needs to fire speech.stopped and auto-generate a response.
-     * Without this, no frames arrive after PTT release and the VAD never
-     * detects end-of-speech (same technique as the official samples where
-     * the mic stream runs continuously and silent frames keep flowing).
+     * Tells the worklet to stop, flushes any buffered frames, then commits
+     * the audio buffer and requests a response (canonical PTT flow per
+     * Azure Voice Live API docs: turn_detection=null + commit + response.create).
+     * If no audio was captured (accidental tap), clears the buffer instead
+     * to avoid the "commit on empty buffer" error.
      */
     stopRecording(): void {
         this.isRecording = false;
+        // Tell worklet to flush remaining samples and stop forwarding
+        this.audioWorklet?.port.postMessage({ command: 'STOP_RECORDING' });
 
-        if (this.ws && this.ws.readyState === WebSocket.OPEN && this.isAuthenticated) {
-            // 400 ms × 24000 Hz × 2 bytes/sample = 19200 bytes of silence
-            const silenceSamples = Math.round(24000 * 0.4);
-            const silenceBuffer = new ArrayBuffer(silenceSamples * 2); // Int16 = 2 bytes, all zeros
-            const base64Silence = this._arrayBufferToBase64(silenceBuffer);
-            this.ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: base64Silence }));
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isAuthenticated) {
+            console.warn('🎙️ stopRecording: not connected, skipping commit');
+            return;
         }
 
-        console.log('\uD83C\uDF99\uFE0F Recording stopped (silence pad sent)');
+        if (this.audioFramesSent === 0) {
+            // Nothing was sent – clear the buffer to keep Azure state clean
+            this.ws.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+            console.log('🎙️ Recording stopped – no audio captured, buffer cleared');
+            return;
+        }
+
+        // Commit the audio buffer and request a response
+        this.commitAndRespond();
+        console.log(`🎙️ Recording stopped – ${this.audioFramesSent} frames committed, response requested`);
     }
 
     /**
@@ -666,6 +681,77 @@ export class AuthenticatedVoiceClient {
                 modalities: ['text']
             }
         }));
+    }
+
+    /**
+     * Decode a pre-recorded audio file (e.g. MP3), resample it to 24 kHz PCM16 mono,
+     * stream it into the Azure input buffer, then commit and request a response.
+     * Use this for the "suggested phrase" shortcut in demo / avatar mode.
+     *
+     * @param audioFile  Raw bytes of the audio file (e.g. fetched MP3)
+     */
+    async sendAudioAndRespond(audioFile: ArrayBuffer): Promise<void> {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isAuthenticated) {
+            console.warn('sendAudioAndRespond: not connected');
+            return;
+        }
+        if (!this.audioContext) {
+            console.warn('sendAudioAndRespond: audio context not ready');
+            return;
+        }
+
+        // Cancel any currently streaming response (barge-in)
+        if (this.isResponseActive) {
+            this.cancelResponse();
+        }
+
+        try {
+            // Decode compressed audio (MP3, WAV, …) using the existing AudioContext
+            const decoded = await this.audioContext.decodeAudioData(audioFile.slice(0));
+
+            // Mix down to mono (use channel 0)
+            const inputSamples = decoded.getChannelData(0);
+            const targetSampleRate = 24000;
+
+            // Resample if needed (linear interpolation)
+            let samples: Float32Array;
+            if (decoded.sampleRate === targetSampleRate) {
+                samples = inputSamples;
+            } else {
+                const ratio = decoded.sampleRate / targetSampleRate;
+                const outputLength = Math.ceil(inputSamples.length / ratio);
+                samples = new Float32Array(outputLength);
+                for (let i = 0; i < outputLength; i++) {
+                    const srcIdx = i * ratio;
+                    const lo = Math.floor(srcIdx);
+                    const hi = Math.min(lo + 1, inputSamples.length - 1);
+                    const frac = srcIdx - lo;
+                    samples[i] = inputSamples[lo] * (1 - frac) + inputSamples[hi] * frac;
+                }
+            }
+
+            // Float32 → Int16 PCM
+            const pcm16 = new Int16Array(samples.length);
+            for (let i = 0; i < samples.length; i++) {
+                const clamped = Math.max(-1, Math.min(1, samples[i]));
+                pcm16[i] = clamped < 0 ? clamped * 32768 : clamped * 32767;
+            }
+
+            // Send in ~100 ms chunks (2400 samples at 24 kHz)
+            const CHUNK_SAMPLES = 2400;
+            for (let offset = 0; offset < pcm16.length; offset += CHUNK_SAMPLES) {
+                const chunk = pcm16.slice(offset, offset + CHUNK_SAMPLES);
+                const base64 = this._arrayBufferToBase64(chunk.buffer as ArrayBuffer);
+                this.ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: base64 }));
+            }
+
+            console.log(`🎵 sendAudioAndRespond: sent ${pcm16.length} PCM16 samples (${(pcm16.length / targetSampleRate).toFixed(2)}s)`);
+
+            // Commit the buffer and request a response (manual PTT flow, VAD is disabled)
+            this.commitAndRespond();
+        } catch (err) {
+            console.error('sendAudioAndRespond: failed to decode/send audio:', err);
+        }
     }
 
     /**

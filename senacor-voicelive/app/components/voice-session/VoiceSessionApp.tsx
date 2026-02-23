@@ -17,6 +17,13 @@ import { cn } from "@/lib/utils";
 
 type ConnectionStatus = "connected" | "connecting" | "disconnected" | "error";
 
+/** Pre-recorded demo phrases for avatar mode suggestion chips */
+const AVATAR_SUGGESTIONS = [
+  { label: "Ich möchte eine Überweisung machen", audio: "/audio/phrase-ueberweisung.mp3" },
+  { label: "Welche Konten bietet ihr an?", audio: "/audio/phrase-konten.mp3" },
+  { label: "Ich hätte gerne einen Termin", audio: "/audio/phrase-termin.mp3" },
+] as const;
+
 interface VoiceSessionAppProps {
   userName?: string | null
   isOpen?: boolean
@@ -563,12 +570,14 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
   }, [status]);
 
   const handlePttEnd = useCallback(() => {
-    const client = voiceClientRef.current;
-    if (!client || !isPttPressedRef.current) return;
+    if (!isPttPressedRef.current) return;
+    // Always reset the ref/state, even if client is null (prevents stuck-pressed)
     isPttPressedRef.current = false;
     setIsPttPressed(false);
-    client.stopRecording(); // sends silence pad → VAD → speech.stopped → auto-response
     setIsMicActive(false);
+    const client = voiceClientRef.current;
+    if (!client) return;
+    client.stopRecording(); // worklet flush → commit → response.create
   // No deps on isPttPressedRef (ref) – callback is stable
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -709,6 +718,33 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
     client.sendTextAndRespond(text);
   }, [status]);
 
+  /**
+   * Send one of the pre-recorded MP3 phrases as audio input.
+   * Fetches the file, decodes it and streams it to Azure exactly like a real
+   * PTT press would – the user's phrase shows up in the transcript automatically.
+   */
+  const handleSendAudioPhrase = useCallback(async (audioPath: string, label: string) => {
+    const client = voiceClientRef.current;
+    if (!client || status !== 'connected') return;
+
+    // Optimistically add user message so the UI feels instant
+    setMessages(prev => [
+      ...prev,
+      { id: Date.now().toString(), role: 'user' as const, content: label, timestamp: new Date() },
+    ]);
+
+    responseStartTimeRef.current = Date.now();
+    setIsWaitingForResponse(true);
+
+    try {
+      const res = await fetch(audioPath);
+      const audioBuffer = await res.arrayBuffer();
+      await client.sendAudioAndRespond(audioBuffer);
+    } catch (err) {
+      console.error('handleSendAudioPhrase failed:', err);
+    }
+  }, [status]);
+
   // Handle Transfer Confirmation
   const handleTransferConfirm = useCallback(() => {
     if (voiceClientRef.current && transferCallId && pendingTransfer) {
@@ -807,40 +843,41 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
 
   const isConnected = status === "connected";
 
-  // Attach non-passive touch + contextmenu listeners to PTT buttons
-  // (React synthetic touch handlers are passive by default → can't call preventDefault)
+  // Show suggestion chips in avatar mode before the first user turn
+  const userHasSpoken = messages.some(m => m.role === 'user');
+  const showAvatarSuggestions = isConnected && !isTranscriptMode && !isTextMode && !userHasSpoken;
+
+  // Block long-press context menu on PTT buttons (non-passive, can't use React synthetic)
   useEffect(() => {
     const buttons = [
       pttAvatarBtnRef.current,
       pttTranscriptBtnRef.current,
     ].filter(Boolean) as HTMLButtonElement[];
 
-    const onTouchStart = (e: TouchEvent) => { e.preventDefault(); handlePttStart(); };
-    const onTouchEnd   = (e: TouchEvent) => { e.preventDefault(); handlePttEnd(); };
-    const onCtxMenu    = (e: Event)      => e.preventDefault();
+    const onCtxMenu = (e: Event) => e.preventDefault();
 
     buttons.forEach((btn) => {
-      btn.addEventListener('touchstart',  onTouchStart, { passive: false });
-      btn.addEventListener('touchend',    onTouchEnd,   { passive: false });
-      btn.addEventListener('touchcancel', onTouchEnd,   { passive: false });
-      btn.addEventListener('contextmenu', onCtxMenu,    { passive: false });
+      btn.addEventListener('contextmenu', onCtxMenu, { passive: false });
     });
 
     return () => {
       buttons.forEach((btn) => {
-        btn.removeEventListener('touchstart',  onTouchStart);
-        btn.removeEventListener('touchend',    onTouchEnd);
-        btn.removeEventListener('touchcancel', onTouchEnd);
         btn.removeEventListener('contextmenu', onCtxMenu);
       });
     };
-  // Re-run whenever the buttons mount/unmount (connected/mode state changes)
-  // NOTE: handlePttStart/End are intentionally excluded – they are now stable
-  // (no isPttPressed in their useCallback deps) and use a ref for the pressed-state
-  // guard. Including them here would cause the effect to re-run on every press,
-  // briefly detaching listeners and swallowing touch events.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, isTranscriptMode, isTextMode]);
+
+  // Reset PTT if the tab goes to the background while the button is held
+  // (touchcancel / pointercancel don't fire on tab-switch)
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.hidden) handlePttEnd();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="phone-container flex flex-col h-full" style={{background: '#f5f5f5', color: '#1a1a2e'}}>
@@ -906,9 +943,9 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
                   />
                 </div>
                 
-                {/* Floating Controls Overlay - Bottom Right (only in pure Avatar mode) */}
-                {!isTranscriptMode && !isTextMode && (
-                  <div className="absolute bottom-4 right-4 z-20">
+                {/* Floating Controls Overlay - Top Right (only in pure Avatar mode, only when video is live) */}
+                {!isTranscriptMode && !isTextMode && hasVideoConnection && (
+                  <div className="absolute top-4 right-4 z-20">
                     <SessionControls
                       isMicActive={isMicActive}
                       isTranscriptMode={isTranscriptMode}
@@ -925,14 +962,38 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
                   </div>
                 )}
 
-                {/* Push-to-Talk Button – Avatar Mode */}
+                {/* Push-to-Talk Button + Suggestion chips – Avatar Mode */}
                 {!isTranscriptMode && !isTextMode && isConnected && (
-                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-1 select-none">
+                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-3 select-none w-[90vw] max-w-xs">
+                    {/* Suggestion chips – shown before the first user turn */}
+                    {showAvatarSuggestions && (
+                      <div className="flex flex-col gap-2 w-full">
+                        {AVATAR_SUGGESTIONS.map((s, i) => (
+                          <button
+                            key={s.audio}
+                            onClick={() => handleSendAudioPhrase(s.audio, s.label)}
+                            className={cn(
+                              "w-full text-sm font-medium px-4 py-2.5 rounded-xl shadow-md",
+                              "bg-white/90 backdrop-blur-sm text-slate-800",
+                              "hover:bg-white active:scale-95 transition-all duration-150",
+                              "animate-in fade-in slide-in-from-bottom-2 duration-300",
+                            )}
+                            style={{ animationDelay: `${i * 60}ms`, animationFillMode: 'backwards' }}
+                          >
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* PTT button */}
+                    <div className="flex flex-col items-center gap-1">
                     <button
                       ref={pttAvatarBtnRef}
-                      onMouseDown={handlePttStart}
-                      onMouseUp={handlePttEnd}
-                      onMouseLeave={handlePttEnd}
+                      onPointerDown={handlePttStart}
+                      onPointerUp={handlePttEnd}
+                      onPointerLeave={handlePttEnd}
+                      onPointerCancel={handlePttEnd}
                       className={cn(
                         "flex items-center justify-center rounded-full transition-all duration-150 shadow-xl",
                         "w-20 h-20 ring-4",
@@ -956,6 +1017,7 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
                     <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.85)', color: '#1a1a2e' }}>
                       {isPttPressed ? "Sprechen…" : "Halten zum Sprechen"}
                     </span>
+                    </div> {/* /PTT button */}
                   </div>
                 )}
               </div>
@@ -985,9 +1047,10 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
                         <div className="flex flex-col items-center gap-1 select-none">
                           <button
                             ref={pttTranscriptBtnRef}
-                            onMouseDown={handlePttStart}
-                            onMouseUp={handlePttEnd}
-                            onMouseLeave={handlePttEnd}
+                            onPointerDown={handlePttStart}
+                            onPointerUp={handlePttEnd}
+                            onPointerLeave={handlePttEnd}
+                            onPointerCancel={handlePttEnd}
                             className={cn(
                               "flex items-center justify-center rounded-full transition-all duration-150 shadow-lg",
                               "w-14 h-14 ring-2",

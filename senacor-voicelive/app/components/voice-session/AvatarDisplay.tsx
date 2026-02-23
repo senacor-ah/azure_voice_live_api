@@ -54,11 +54,11 @@ export function AvatarDisplay({ isPip, isConnected, hasVideo, videoRef, classNam
         )}
       </div>
 
-      {/* Avatar Label - only on main view */}
-      {!isPip && (
-        <div className="absolute bottom-2 left-2 z-20 px-2 py-1 rounded-lg" style={{background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(8px)', border: '1px solid rgba(125,160,215,0.25)'}}>
+      {/* Avatar Label - only on main view, only when video is live */}
+      {!isPip && hasVideo && (
+        <div className="absolute top-4 left-4 z-20 px-2 py-1 rounded-lg" style={{background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(8px)', border: '1px solid rgba(125,160,215,0.25)'}}>
           <span className="font-medium text-sm" style={{color: '#1a1a2e'}}>
-            {hasVideo ? "Live Avatar" : "Avatar"}
+            Live Avatar
           </span>
         </div>
       )}

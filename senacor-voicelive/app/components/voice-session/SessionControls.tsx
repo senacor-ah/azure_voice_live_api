@@ -1,6 +1,6 @@
 'use client';
 
-import { Mic, MicOff, PhoneOff, Phone, Keyboard } from "lucide-react";
+import { PhoneOff, Phone, Keyboard } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface SessionControlsProps {
@@ -18,11 +18,9 @@ interface SessionControlsProps {
 }
 
 export function SessionControls({
-  isMicActive,
   isTranscriptMode,
   isTextMode,
   isConnected,
-  onMicToggle,
   onConnect,
   onDisconnect,
   onTranscriptToggle,
@@ -61,26 +59,7 @@ export function SessionControls({
         <Keyboard className={iconSize} />
       </button>
 
-      {/* Microphone Button – hidden in text mode */}
-      {!isTextMode && (
-        <button
-          onClick={onMicToggle}
-          disabled={!isConnected}
-          className={cn(
-            isMicActive ? "control-btn-primary rounded-full" : "control-btn-secondary rounded-full",
-            "flex items-center justify-center",
-            !isConnected && "opacity-50 cursor-not-allowed",
-            btnSize
-          )}
-          aria-label={isMicActive ? "Mikrofon stoppen" : "Mikrofon starten"}
-        >
-          {isMicActive ? (
-            <Mic className={iconSize} />
-          ) : (
-            <MicOff className={iconSize} />
-          )}
-        </button>
-      )}
+
 
       {/* Connect/Disconnect Button */}
       {isConnected ? (
