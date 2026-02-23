@@ -41,7 +41,7 @@ export function VoiceSessionOverlay({ isOpen, onClose, userName }: VoiceSessionO
     <>
       {/* Wrapper: fullscreen on mobile, chat-widget popup on desktop */}
       <div
-        className="fixed z-[100] inset-0 md:inset-auto md:bottom-[96px] md:right-8 md:w-[400px] md:rounded-3xl md:overflow-hidden"
+        className="chat-widget fixed z-[100] inset-0 md:inset-auto md:bottom-[96px] md:right-8 md:w-[400px] md:rounded-3xl md:overflow-hidden"
         style={{
           display: isOpen ? '' : 'none',
           boxShadow: '0 8px 40px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08)',
@@ -57,7 +57,7 @@ export function VoiceSessionOverlay({ isOpen, onClose, userName }: VoiceSessionO
           >
             <X className="w-4 h-4" />
           </button>
-          <VoiceSessionApp userName={userName} isOpen={isOpen} />
+          <VoiceSessionApp userName={userName} isOpen={isOpen} onClose={onClose} />
         </div>
       </div>
     </>

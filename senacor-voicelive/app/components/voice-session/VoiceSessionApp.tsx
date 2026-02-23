@@ -27,9 +27,10 @@ const AVATAR_SUGGESTIONS = [
 interface VoiceSessionAppProps {
   userName?: string | null
   isOpen?: boolean
+  onClose?: () => void
 }
 
-export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
+export function VoiceSessionApp({ userName, isOpen, onClose }: VoiceSessionAppProps) {
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const [isMicActive, setIsMicActive] = useState(false);
   const [isTranscriptMode, setIsTranscriptMode] = useState(false);
@@ -639,7 +640,10 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
     connectionStartTimeRef.current = null;
     currentAiTextRef.current = '';
     currentAiMessageIdRef.current = null;
-  }, []);
+    
+    // Close parent overlay if callback provided (user requested to close on disconnect)
+    onClose?.();
+  }, [onClose]);
 
   const handleConnect = useCallback(async () => {
     try {
@@ -849,10 +853,6 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
 
   const isConnected = status === "connected";
 
-  // Show suggestion chips in avatar mode before the first user turn
-  const userHasSpoken = messages.some(m => m.role === 'user');
-  const showAvatarSuggestions = isConnected && !isTranscriptMode && !isTextMode && !userHasSpoken;
-
   // Block long-press context menu on PTT buttons (non-passive, can't use React synthetic)
   useEffect(() => {
     const buttons = [
@@ -1018,30 +1018,21 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
                   </div>
                 )}
 
-                {/* Push-to-Talk Button + Suggestion chips – Avatar Mode */}
-                {!isTranscriptMode && !isTextMode && isConnected && (
-                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-3 select-none w-[90vw] max-w-xs">
-                    {/* Suggestion chips – shown before the first user turn */}
-                    {showAvatarSuggestions && (
-                      <div className="flex flex-col gap-2 w-full">
-                        {AVATAR_SUGGESTIONS.map((s, i) => (
-                          <button
-                            key={s.audio}
-                            onClick={() => handleSendAudioPhrase(s.audio, s.label)}
-                            className={cn(
-                              "w-full text-sm font-medium px-4 py-2.5 rounded-xl shadow-md",
-                              "bg-white/90 backdrop-blur-sm text-slate-800",
-                              "hover:bg-white active:scale-95 transition-all duration-150",
-                              "animate-in fade-in slide-in-from-bottom-2 duration-300",
-                            )}
-                            style={{ animationDelay: `${i * 60}ms`, animationFillMode: 'backwards' }}
-                          >
-                            {s.label}
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                {/* Loading Overlay – shown while connected but avatar video not yet live */}
+                {!isTranscriptMode && !isTextMode && (status === 'connecting' || (isConnected && !hasVideoConnection)) && (
+                  <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 pointer-events-none"
+                    style={{background: 'linear-gradient(135deg, #eef3fb 0%, #dce8f5 100%)'}}>
+                    <div className="w-14 h-14 rounded-full border-4 border-t-transparent animate-spin"
+                      style={{borderColor: '#7da0d7', borderTopColor: 'transparent'}} />
+                    <p className="text-sm font-medium" style={{color: '#1a1a2e'}}>
+                      {status === 'connecting' ? 'Verbindung wird aufgebaut…' : 'Avatar wird geladen…'}
+                    </p>
+                  </div>
+                )}
 
+                {/* Push-to-Talk Button – Avatar Mode (only after video is live) */}
+                {!isTranscriptMode && !isTextMode && hasVideoConnection && (
+                  <div className="absolute bottom-6 md:bottom-10 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-3 select-none w-[90vw] max-w-xs">
                     {/* PTT button */}
                     <div className="flex flex-col items-center gap-1">
                     <button
@@ -1075,7 +1066,7 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
                     </span>
                     </div> {/* /PTT button */}
                   </div>
-                )}
+                )} {/* /PTT + avatar mode controls */}
               </div>
               
               {/* Bottom Part: Controls */}
