@@ -255,14 +255,14 @@ function buildGraph(
       position: { x: 230, y: 0 },
       selectable: false, draggable: false,
       style: { width: 1460, height: 580, zIndex: -1, pointerEvents: 'none' } as React.CSSProperties,
-      data: { label: 'Azure Voice Live Backend', icon: 'cloud', accent: '#7c3aed', accent2: '#4f46e5' },
+      data: { label: 'Azure Zone', icon: 'cloud', accent: '#7c3aed', accent2: '#4f46e5' },
     },
     {
       id: 'zone-onprem', type: 'zone',
       position: { x: 230, y: 600 },
       selectable: false, draggable: false,
       style: { width: 1460, height: 180, zIndex: -1, pointerEvents: 'none' } as React.CSSProperties,
-      data: { label: 'OnPrem Systeme', icon: 'server', accent: '#ca8a04', accent2: '#eab308' },
+      data: { label: 'OnPrem Systeme', icon: 'server', accent: '#16a34a', accent2: '#22c55e' },
     },
   ]
 
@@ -281,9 +281,9 @@ function buildGraph(
     { id: 'rag',            label: 'RAG Pipeline',       sublabel: 'Wissensabfrage',      icon: 'search',         color: '#d97706', color2: '#f59e0b', x: 1120, y: 55  },
     { id: 'fn_appointment', label: 'Terminvereinbarung', sublabel: 'Function Call',       icon: 'calendar',       color: '#7c3aed', color2: '#8b5cf6', x: 1300, y: 225 },
     { id: 'fn_transfer',    label: 'Überweisung',        sublabel: 'Function Call',       icon: 'arrowleftright', color: '#db2777', color2: '#ec4899', x: 1120, y: 395 },
-    { id: 'kunden_api',      label: 'Kunden API',         sublabel: 'OnPrem Integration',  icon: 'plug',           color: '#ca8a04', color2: '#eab308', x: 440, y: 640 },
-    { id: 'transaction_api',  label: 'Transaktions API',   sublabel: 'OnPrem Integration',  icon: 'plug',           color: '#ca8a04', color2: '#eab308', x: 1120, y: 640 },
-    { id: 'terminierung_api', label: 'Terminierungs API',  sublabel: 'OnPrem Integration',  icon: 'plug',           color: '#ca8a04', color2: '#eab308', x: 1300, y: 640 },
+    { id: 'kunden_api',      label: 'Kunden API',         sublabel: 'OnPrem Integration',  icon: 'plug',           color: '#16a34a', color2: '#22c55e', x: 440, y: 640 },
+    { id: 'transaction_api',  label: 'Transaktions API',   sublabel: 'OnPrem Integration',  icon: 'plug',           color: '#16a34a', color2: '#22c55e', x: 1120, y: 640 },
+    { id: 'terminierung_api', label: 'Terminierungs API',  sublabel: 'OnPrem Integration',  icon: 'plug',           color: '#16a34a', color2: '#22c55e', x: 1300, y: 640 },
   ]
 
   for (const s of stepDefs) {

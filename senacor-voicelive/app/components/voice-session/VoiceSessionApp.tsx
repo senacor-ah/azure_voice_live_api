@@ -303,6 +303,9 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
       // Text Mode: finalize the streaming bubble when response is complete
       client.onTextDone((fullText) => {
         console.log('📝 Text response done:', fullText);
+        // Always clear the loading indicator – response is fully received
+        setIsWaitingForResponse(false);
+        responseStartTimeRef.current = null;
         if (fullText.trim()) {
           enqueueAssistantMessageRef.current(fullText);
         } else {
@@ -332,6 +335,9 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
       
       // Event Handler: Turn Detection - User stoppt sprechen
       client.onSpeechStopped(() => {
+        // In text mode the user types – ignore VAD speech-stop events
+        // to avoid spuriously showing the typing indicator.
+        if (isTextModeRef.current) return;
         console.log('⏱️ Turn detected: User stopped speaking, waiting for audio playback...');
         responseStartTimeRef.current = Date.now();
         setIsWaitingForResponse(true);
@@ -499,10 +505,10 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
             console.warn('⚠️ Invalid workflow state for UI display:', workflowState);
           }
           
-          // Cache data, but don't show any overlay or modal yet – wait for audio drain
+          // Cache data and show loading, but don't show modal yet
           setAppointmentData(parsedArgs);
           setAppointmentCallId(callId);
-          setIsLoadingAppointments(false);
+          setIsLoadingAppointments(true);
           setShowAppointmentModal(false);
           pendingUiActionRef.current = 'appointment';
           
@@ -878,6 +884,56 @@ export function VoiceSessionApp({ userName, isOpen }: VoiceSessionAppProps) {
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Unsupported-browser / mic-error screen ──────────────────────────────
+  const isMicUnsupportedError = status === "error" && error?.includes('Mikrofon-Zugriff wird von diesem Browser');
+  const isIOS = typeof navigator !== 'undefined' && /iP(hone|ad|od)/.test(navigator.userAgent);
+  const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+
+  if (isMicUnsupportedError) {
+    return (
+      <div className="phone-container flex flex-col h-full items-center justify-center gap-6 px-6 text-center" style={{background: '#f5f5f5', color: '#1a1a2e'}}>
+        {/* Icon */}
+        <div className="w-20 h-20 rounded-full flex items-center justify-center" style={{background: '#fee2e2'}}>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="1.8" className="w-10 h-10">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+          </svg>
+        </div>
+
+        {/* Heading */}
+        <div>
+          <h2 className="text-xl font-bold mb-2">Mikrofon nicht verfügbar</h2>
+          <p className="text-sm leading-relaxed" style={{color: '#64748b'}}>
+            {isIOS
+              ? 'Chrome auf iOS unterstützt den Mikrofon-Zugriff leider nicht. Bitte öffne diese Seite in Safari.'
+              : 'Dein Browser unterstützt den Mikrofon-Zugriff nicht. Stelle sicher, dass die Seite über HTTPS aufgerufen wird.'}
+          </p>
+        </div>
+
+        {/* CTA buttons */}
+        {isIOS && (
+          <a
+            href={`safari-${currentUrl}`}
+            className="w-full py-3.5 rounded-2xl text-sm font-semibold text-white flex items-center justify-center gap-2"
+            style={{background: '#1a1a2e'}}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253" />
+            </svg>
+            In Safari öffnen
+          </a>
+        )}
+
+        <button
+          onClick={() => { setError(null); setStatus("disconnected"); }}
+          className="w-full py-3 rounded-2xl text-sm font-medium"
+          style={{background: '#e2e8f0', color: '#1a1a2e'}}
+        >
+          Zurück
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="phone-container flex flex-col h-full" style={{background: '#f5f5f5', color: '#1a1a2e'}}>

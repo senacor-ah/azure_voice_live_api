@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { WorkflowPipeline } from './WorkflowPipeline'
 import { EventDetailPanel } from './EventDetailPanel'
-import { SidebarPanel } from './SidebarPanel'
 import { usePubSub } from './use-pubsub'
 
 export default function DashboardPage() {
@@ -27,13 +26,9 @@ export default function DashboardPage() {
     status,
     events,
     stepStates,
-    stats,
     connectedClients,
     selectedClientId,
     setSelectedClientId,
-    connect,
-    disconnect,
-    clearEvents,
     selectedEvent,
     setSelectedEvent,
   } = usePubSub(pubsubUrl, { autoConnect: true })
@@ -161,15 +156,6 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* ── Right sidebar ── */}
-      <SidebarPanel
-        status={status}
-        stats={stats}
-        stepStates={stepStates}
-        onConnect={connect}
-        onDisconnect={disconnect}
-        onClear={clearEvents}
-      />
     </div>
   )
 }

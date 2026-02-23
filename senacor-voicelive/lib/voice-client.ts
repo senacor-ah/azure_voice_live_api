@@ -269,6 +269,12 @@ export class AuthenticatedVoiceClient {
             });
             
             // Microphone Access
+            if (!navigator.mediaDevices?.getUserMedia) {
+                throw new Error(
+                    'Mikrofon-Zugriff wird von diesem Browser nicht unterstützt. ' +
+                    'Bitte öffne die Seite in Safari (iOS) oder stelle sicher, dass die Verbindung über HTTPS erfolgt.'
+                );
+            }
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     channelCount: 1,
@@ -327,6 +333,12 @@ export class AuthenticatedVoiceClient {
             return;
         }
         try {
+            if (!navigator.mediaDevices?.getUserMedia) {
+                throw new Error(
+                    'Mikrofon-Zugriff wird von diesem Browser nicht unterstützt. ' +
+                    'Bitte öffne die Seite in Safari (iOS) oder stelle sicher, dass die Verbindung über HTTPS erfolgt.'
+                );
+            }
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     channelCount: 1,

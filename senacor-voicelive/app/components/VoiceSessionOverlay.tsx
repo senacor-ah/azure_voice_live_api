@@ -48,7 +48,7 @@ export function VoiceSessionOverlay({ isOpen, onClose, userName }: VoiceSessionO
           height: undefined,
         }}
       >
-        <div className="relative w-full h-full md:h-[680px]">
+        <div className="relative w-full h-full md:h-[min(780px,calc(100vh-110px))]">
           <button
             onClick={onClose}
             className="absolute top-3 right-3 z-10 w-8 h-8 rounded-full flex items-center justify-center transition-colors"
