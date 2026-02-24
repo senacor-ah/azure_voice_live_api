@@ -223,6 +223,27 @@ export function VoiceSessionApp({ userName, isOpen, onClose }: VoiceSessionAppPr
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
+  // iOS fallback: `video.play()` may be blocked by autoplay policy so
+  // `onVideoPlaybackStarted` never fires. Listen directly on the video element
+  // for the native `playing` event as a reliable second source of truth.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onPlaying = () => {
+      setHasVideoConnection(true);
+    };
+    video.addEventListener('playing', onPlaying);
+    return () => video.removeEventListener('playing', onPlaying);
+  }, []);
+
+  // Safety timeout: if we are connected but video never starts within 8 s,
+  // dismiss the loading overlay so the static avatar preview is visible.
+  useEffect(() => {
+    if (status !== 'connected' || hasVideoConnection) return;
+    const timer = setTimeout(() => setHasVideoConnection(true), 8000);
+    return () => clearTimeout(timer);
+  }, [status, hasVideoConnection]);
+
   // Calculate average response time
   useEffect(() => {
     if (responseTimings.length > 0) {
